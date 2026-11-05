@@ -9,8 +9,9 @@ transport, anonymous-access and verification layers needed for this direction.
 The research-specific hypotheses below originated on 2026-10-16. They are
 retained as candidate applications, not the product's exclusive scope or claims
 of patent novelty, established demand or guaranteed anonymity. The current
-implementation handles only small UTF-8 HTTP exchanges through local Sphinx
-links and a direct HTTPS worker; it does not yet prove general web traffic in ZK.
+implementation supports bounded binary HTTPS through a local Tor/SOCKS client,
+plus small UTF-8 exchanges through local Sphinx links and a direct HTTPS worker.
+Neither path currently proves general web traffic in ZK.
 
 ## Research without disclosing the overall objective
 
@@ -36,7 +37,7 @@ prototype, with ambiguous mutation outcomes reported rather than retried.
 | Application | Specific adaptation beyond the original wrapper | First experiment | Main failure condition |
 | --- | --- | --- | --- |
 | API CRUD and application egress | Preserve method/path/query, explicit credentials, request bytes and response semantics in a caller-scoped context. | Exercise create/read/replace/patch/delete against a test API, including failed responses and lost replies. | Account credentials identify the caller, HTTP semantics change, or a mutation is repeated after an unknown outcome. |
-| Public document and web fetching | Fetch source data through a selected private transport; bound resources and retain origin/status information. | Compare small UTF-8 pages with exact-byte large/binary fixtures once fragmentation exists. | Large responses are truncated, resource use is unbounded, or redirects escape target policy. |
+| Public document and web fetching | Fetch source data through a selected private transport; bound resources and retain origin/status information. | Test exact-byte text/binary fixtures in the local TLS route; extend them to covered mode after fragmentation exists. | Large responses are truncated, resource use is unbounded, or redirects escape target policy. |
 | Private agent tool egress | Provide one request interface for search, APIs and other web tools; isolate each job's credentials and retained state. | Run independent synthetic jobs with canary credentials and explicit destination capabilities. | Tool output leaks context or cookies/credentials cross job boundaries. |
 | Research with a confidential objective | Local goal decomposition, per-job aliases and local synthesis; workers receive only bounded questions. | Use synthetic projects with hidden goals. Compare remote attackers' goal classification and answer/source quality for raw, redacted and decomposed queries. | Query semantics reveal the objective, or decomposition loses essential context. |
 | Private debugging for unreleased software | Locally extract a minimal failing example, use parser-aware symbol/path aliases, send only necessary diagnostics, and restore patches locally. Prose rewriting alone is insufficient. | Seed synthetic identifiers and secrets in source, paths, stack traces and tool results. Measure leakage and whether reconstructed patches pass independent functional tests. | Exact code reveals a distinctive project or a transformation changes behavior. |

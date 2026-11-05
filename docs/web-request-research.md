@@ -108,19 +108,26 @@ result or a claim that any one dependency has been independently audited here.
 
 ## Where this repository stands
 
-The current `zkweb request` command supports seven HTTP methods, one explicit
-public HTTPS origin, query strings, explicit headers and UTF-8 bodies. Requests
-and responses traverse scheduled local Sphinx/SURB links. The worker makes a
-direct HTTPS connection and sees the request plaintext. Each encoded frame can
-carry at most 4,090 bytes of application data; requests also need room for the
-SURB envelope.
-All transport nodes remain on one machine.
+Implementation follow-through on 2026-11-05 added two explicit modes:
 
-There is no generic HTTP access-proof, payment or response-proof integration.
-There is no remote anonymity service, byte-stream tunnel, binary fragmentation,
-persistent session API, WebSocket support or browser-wide interception in this
-path. The wallet/proof stack inherited from zkAPI remains a separate component.
-See the [implementation](../research-mixnet/README.md) and
+| Mode | Implemented behavior | Boundary |
+| --- | --- | --- |
+| `zkweb fetch` | Local HTTP/1.1 over an explicit Tor/SOCKS5 TCP route, client-to-origin TLS, remote destination DNS, exact binary bodies, repeated headers and an origin-scoped reusable client. | Requires an already-running trusted loopback proxy and its resolved-address policy. Bodies default to 1 MiB, configurable up to 16 MiB. No cover schedule or ZK proof is attached to this mode. |
+| `zkweb request` | Seven methods and bounded UTF-8 requests through scheduled local Sphinx/SURB links to a direct HTTPS worker. | Worker receives plaintext requests and credentials. Frames carry at most 4,090 bytes of application data including the request's reply envelope; all mix nodes remain on one machine. |
+
+The local route uses fresh per-client Tor isolation parameters and explicit
+per-request credentials, with no ambient proxy or cookie jar. It does not
+operate a relay network or independently verify the local proxy's Tor identity
+or configuration. Local SOCKS/TLS tests are evidence of protocol behavior, not a
+live-network anonymity or performance evaluation.
+
+There is no generic HTTP access-proof, payment or response-proof integration,
+persistent session API, HTTP/2 or HTTP/3, WebSocket support or browser-wide
+interception. Covered-mode binary fragmentation remains open; the new local
+route's bounded binary transfers do not implement it. The inherited zkAPI
+wallet/proof stack remains separate. See the
+[local HTTPS guide](local-https-client.md),
+[prototype modes](../research-mixnet/README.md) and
 [milestones](../research-mixnet/ARCHITECTURE.md).
 
 The rebrand changes the product documentation and public executable to `zkweb`.
@@ -133,8 +140,8 @@ deployment pins.
 
 | Priority | Deliverable | Evidence required |
 | --- | --- | --- |
-| 1 | General request/context and transport interfaces; a practical TLS-preserving route | Exact-byte method/path/query/body tests; concurrent credential/cookie isolation; DNS and target-policy tests; no direct fallback. |
-| 2 | Bounded large/binary request and response support | Fragment ordering/replay/resource limits for covered mode; stream backpressure/cancellation limits for tunnel mode; no silent truncation. |
+| 1 | Extend the implemented origin-scoped client and Tor/SOCKS route into additional backends and a local context API | Existing exact-byte, certificate, header, DNS, limit and no-fallback tests cover the first route. Add independent concurrent-context and daemon-boundary evidence as that API is implemented. |
+| 2 | Extend bounded binary transfers to covered mode and streaming interfaces | Binary bodies now work in the local TLS route. Covered mode still needs fragment ordering/replay/resource limits; future streaming needs backpressure/cancellation bounds. |
 | 3 | Compare a deployed mixnet integration with the existing lab and a Tor route | Independent-host tests, measured completion/latency/bandwidth, fault behavior and explicit adversary assumptions. Do not equate synthetic timing scores with anonymity. |
 | 4 | Optional anonymous admission/credits | Pin one protocol; test issuance/redemption, replay and linkability boundaries; retain existing wallet release gates for any funded adapter. |
 | 5 | Optional selectively verifiable response | Pin and compare TLSN/Reclaim versions, supported TLS/sites, proof cost, disclosure/redaction, freshness and verifier trust. |

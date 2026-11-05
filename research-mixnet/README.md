@@ -12,11 +12,13 @@ The fork starts at `vbuterin/zkapi` commit
 `0fb263b0da04986cfe5c63b12340c1581018ae9b`. The source directory, Go module path
 and upstream protocol identifiers retain their historical names.
 
-It is a working **loopback transport experiment**, not a production anonymity
-service. It runs headlessly. `demo` and `compare` use synthetic jobs and emit
-aggregate JSON. The separate opt-in `request` command carries a bounded HTTP
-request over the same local Sphinx/SURB transport to an HTTPS worker. The current
-HTTP path does not generate ZK proofs of access, execution or response contents.
+It runs headlessly with two explicit HTTP modes. `fetch` executes HTTP locally
+over an already-running Tor/SOCKS5 proxy, keeping TLS between the local client
+and origin and supporting bounded binary bodies. `request` carries a smaller
+UTF-8 exchange over the **loopback Sphinx/SURB experiment** to an HTTPS worker.
+`demo` and `compare` use synthetic jobs and emit aggregate JSON. The module does
+not provide its own production anonymity network or generate ZK proofs of
+access, execution or response contents.
 See the [current implementation research](../docs/web-request-research.md) for the
 roles of private transport, anonymous access and selective data verification.
 
@@ -32,6 +34,7 @@ cd research-mixnet
 make test
 make vet
 make build
+./bin/zkweb fetch --help
 ./bin/zkweb demo
 
 # Same fixed schedules, with no jobs at all:
@@ -61,6 +64,59 @@ Ctrl+C cancels the run and joins workers and peer subprocesses. The `demo` comma
 returns a nonzero status for incomplete jobs. The `compare` command records
 incomplete jobs as measurements, since loss and disconnection are deliberate.
 Dropped observation events invalidate that trial's attack scores.
+
+## Local HTTPS through Tor/SOCKS5
+
+`fetch` preserves request and response bytes while HTTP and TLS execute on this
+machine. It requires an explicit numeric loopback proxy; `tor://` requests
+Tor authentication isolation, while `socks5://` uses plain SOCKS5 without that
+isolation. The proxy must already be running and configured. zkWeb does not
+start Tor, verify that the process is Tor, or fall back to a direct connection.
+
+```sh
+# After starting your configured Tor SOCKS port, read from an API you control.
+printf '%s\n' '{"method":"GET","path":"/items/1"}' |
+  ./bin/zkweb fetch --target https://api.example.com \
+    --proxy tor://127.0.0.1:9050 --input -
+
+# Binary request bytes use standard base64; this body is 00 01 ff.
+printf '%s\n' '{"method":"POST","path":"/files","headers":{"Content-Type":"application/octet-stream"},"body_base64":"AAH/"}' |
+  ./bin/zkweb fetch --target https://api.example.com \
+    --proxy tor://127.0.0.1:9050 --input -
+
+# Configure bounds for a request envelope stored in a protected file.
+./bin/zkweb fetch --target https://api.example.com \
+  --proxy socks5://127.0.0.1:1080 --input fetch.json \
+  --timeout 90s --max-request-bytes 4194304 --max-response-bytes 4194304
+```
+
+The input fields are `method`, relative `path` (including query), optional
+`headers`, and either a UTF-8 `body` string or `body_base64`. Header values may
+be strings or arrays of strings. The output has `status`, end-to-end `headers`,
+and a UTF-8 `body` or binary `body_base64`; failures can return an `error`.
+Unknown, duplicate, null or oversized input fields are rejected. Keep request
+credentials in stdin or a protected file, rather than command arguments.
+
+Request and response body limits each default to 1 MiB and may be configured
+from 1 byte to 16 MiB. Headers are bounded to 64 KiB and the path to 8 KiB. The
+default deadline is 45 seconds, configurable from 1 second to 10 minutes.
+There is no ambient cookie jar, environment proxy or inherited authentication.
+Redirects and automatic retries are disabled. A failure after transport begins
+is `delivery_unknown`, with no partial body returned as complete; a write may
+already have executed. HTTP statuses of 400 or greater preserve the response
+and make the command exit nonzero.
+
+Each new client context has fresh Tor SOCKS authentication state. The Tor port
+must enforce `IsolateSOCKSAuth`; a successful handshake cannot prove that setting
+or guarantee a different exit. Destination names go to the proxy without local
+DNS queries. Static checks reject private IP literals and known local names,
+but the trusted proxy must enforce policy on addresses resolved remotely.
+
+The proxy sees destinations and timing, and the origin sees normal request
+contents and any account identity. This path supplies no Sphinx cover or ZK
+proof, and does not yet support WebSockets, HTTP/3 or browser-wide interception.
+Read the [local HTTPS client guide](../docs/local-https-client.md) for the trust
+boundary, configuration and full limits.
 
 ## Bounded HTTP requests
 
@@ -116,8 +172,8 @@ errors make the command exit nonzero while preserving the response on stdout.
 The command does not persist inputs or responses; shell redirection can save
 them if desired.
 
-Requests and replies must each fit one padded cell: 4,090 bytes of application
-frame data. A request also carries the SURB and JSON/base64 overhead, so its
+In `request` mode, requests and replies must each fit one padded cell: 4,090 bytes
+of application frame data. A request also carries the SURB and JSON/base64 overhead, so its
 usable input budget is smaller. Oversized envelopes are rejected before egress;
 large or non-UTF-8 responses return a bounded error. There is no fragmentation,
 binary transfer or streaming. Automatic retries are disabled. If the epoch ends
@@ -223,12 +279,14 @@ defeat a colluding provider and guard. The opt-in HTTP worker adds bounded CRUD
 egress, but no directory/PKI, remote link authentication, packet-expiry protocol,
 persistent replay store, SURB replenishment, delivery/retry protocol, real
 inference, local LLM rewriter or zkAPI integration.
-Payloads are bounded to one cell. Large and binary bodies need a reviewed
-fragmentation/reassembly protocol with independent response scheduling, resource
-limits and explicit completion semantics. Streaming, WebSockets, CONNECT,
-application sessions and optional proof adapters require separate designs and
-acceptance tests; none is available in this prototype. X25519 here is not
-post-quantum protection, and Sphinx encryption is not a ZK execution proof.
+Sphinx `request` payloads are bounded to one cell. Larger or binary covered
+transfers need a reviewed fragmentation/reassembly protocol with independent
+response scheduling, resource limits and explicit completion semantics. The
+separate `fetch` mode already supports bounded binary HTTPS through a proxy,
+with different timing and trust assumptions. Streaming, WebSockets, CONNECT,
+persistent application sessions and optional proof adapters require separate
+designs and acceptance tests. X25519 here is not post-quantum protection, and
+Sphinx encryption is not a ZK execution proof.
 
 See [architecture and production milestones](ARCHITECTURE.md),
 [candidate applications](APPLICATIONS.md), and [validation evidence](evidence/README.md).

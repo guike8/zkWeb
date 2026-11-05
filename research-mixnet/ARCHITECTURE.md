@@ -6,21 +6,23 @@ egress and AI/research workflows use the same method, destination, headers,
 body and response interface. Supporting the breadth of web requests is the
 direction, rather than a claim of universal compatibility today.
 
-The current implementation is a local Sphinx/SURB transport experiment with a
-bounded HTTPS worker. Large and binary bodies, streaming, browser sessions and
-optional proofs remain design work. The [implementation research](../docs/web-request-research.md)
+The current implementation has a local HTTPS client over an explicit Tor/SOCKS5
+route, alongside the local Sphinx/SURB experiment with a bounded HTTPS worker.
+The local client supports bounded binary bodies. Covered fragmentation,
+streaming, persistent browser sessions and optional proofs remain design work.
+The [implementation research](../docs/web-request-research.md)
 compares existing systems and their trust boundaries.
 
 ## Separate responsibilities
 
 | Part | Intended responsibility | Current status |
 | --- | --- | --- |
-| Request interface | Preserve HTTP method, origin/path/query, allowed headers, body, status and response data. | One explicit public HTTPS origin, seven methods, small UTF-8 bodies, one request per fixed epoch. |
-| Transport | Hide client/request linkage under an explicit adversary model, with mode-specific latency and bandwidth tradeoffs. | Scheduled, fixed-size loopback Sphinx links with cover and SURB replies; no independent operators or deployed anonymity service. |
-| Session and credential controls | Scope credentials, cookies, destinations and retained state to a caller-selected context. | Explicit envelope headers, no ambient cookie jar or environment proxy; no persistent session API. |
+| Request interface | Preserve HTTP method, origin/path/query, allowed headers, body, status and response data. | Seven methods and a pinned HTTPS origin; `fetch` preserves bounded binary bytes, while `request` supports small UTF-8 bodies and one request per fixed epoch. |
+| Transport | Hide client/request linkage under an explicit adversary model, with mode-specific latency and bandwidth tradeoffs. | `fetch` uses an explicit loopback Tor/SOCKS5 route with client-to-origin TLS and no direct fallback; `request` uses scheduled loopback Sphinx links with cover. Neither is an independently evaluated anonymity service operated by this project. |
+| Session and credential controls | Scope credentials, cookies, destinations and retained state to a caller-selected context. | Origin-scoped reusable client with per-client Tor isolation state, explicit headers and no ambient cookie jar or environment proxy; persistent session/daemon APIs remain future work. |
 | Anonymous access or payment | Prove eligibility or spending authority without exposing unnecessary identity. | Inherited zkAPI wallet/proof components exist separately; the HTTP worker has no access-proof or billing integration. |
 | Optional response verification | Establish selected facts about authenticated response data with a defined verifier and trust model. | Not implemented; evaluate existing zkTLS/notary protocols before choosing an adapter. |
-| Applications | Offer browser/tool interfaces, private research and other workflows above the request engine. | CLI request mode plus synthetic transport experiments; research planning is a future application. |
+| Applications | Offer browser/tool interfaces, private research and other workflows above the request engine. | CLI `fetch` and `request` modes plus synthetic transport experiments; browser integration and research planning remain future work. |
 
 A zero-knowledge eligibility proof does not hide authenticated account identity
 from an API, and a proof about selected response data does not itself anonymize
@@ -50,9 +52,40 @@ traffic as zero knowledge.
    objective, minimize questions, restore local context and verify citations; an
    API client may need exact bytes and session continuity instead.
 
-This flow is a design target. Only the bounded loopback request exchange below
-is implemented. The previous headless research-daemon concept is an application
-on top of this engine, not a restriction on general request operations.
+This flow is a design target. The local HTTPS client and bounded loopback request
+exchange below implement its initial request paths. The previous headless
+research-daemon concept is an application on top of this engine, not a restriction
+on general request operations.
+
+## Local client-to-origin TLS mode
+
+`fetch` uses an origin-scoped `webclient.Client` and explicit loopback SOCKS
+route. HTTP executes locally and TLS terminates at that client and the origin;
+there is no application worker receiving the plaintext body or credentials.
+Destination names use SOCKS domain addressing, so no local destination DNS query
+is made. The client blocks private literals and known local names statically;
+the trusted proxy must enforce egress policy on remotely resolved addresses.
+
+Tor mode uses modern SOCKS authentication: username `<torS0X>0` and a fresh
+64-hex-character password for each client context, retained across its dials.
+It requires the Tor port's `IsolateSOCKSAuth` behavior. The client cannot verify
+the proxy implementation/configuration or promise different exits. Plain
+`socks5://` mode provides no Tor authentication isolation.
+[Tor SOCKS extensions](https://spec.torproject.org/socks-extensions.html).
+
+Both body limits default to 1 MiB and support 1 byte–16 MiB; request paths are
+bounded to 8 KiB and headers to 64 KiB. The deadline defaults to 45 seconds and
+supports 1 second–10 minutes. No ambient proxy, cookie jar or authentication is
+inherited. Fresh connections, no redirects and no replayable request-body
+support prevent automatic HTTP retries. Failures after handing a request to
+the transport report `delivery_unknown`; incomplete bodies are not returned as
+complete responses.
+
+The configured proxy must already be running; the client does not start or
+attest Tor. This route has no Sphinx cover or ZK proof and currently supports
+bounded HTTPS HTTP/1.1 exchanges, not WebSockets, HTTP/3 or browser interception.
+Operators can observe hostnames/timing, and origins see request/account data.
+See the [local HTTPS client guide](../docs/local-https-client.md).
 
 ## Opt-in HTTP adapter experiment
 
@@ -92,7 +125,7 @@ It has no payment authorization, wallet custody or zkAPI lease integration.
 | Fixed epoch, bounded pools, no catch-up | Jobs do not create extra scheduled slots; overload reduces availability instead of increasing rate. |
 | Random eligible selection with residence delay | Introduces reordering; the static single-host comparison cannot establish anonymity. |
 | Replay cache without eviction in a key epoch | Reject repeated packets; capacity exhaustion stops admissions. Production needs authenticated epochs, freshness and restart-safe replay handling. |
-| Synthetic `demo`/`compare` worker | Exercise the transport without leaking prompts, issuing paid calls or importing a vulnerable wallet release; real HTTP work requires the separate opt-in `request` command. |
+| Synthetic `demo`/`compare` worker | Exercise the lab without leaking prompts or issuing paid calls; real HTTP work uses the separate opt-in `request` or `fetch` command with its documented route. |
 
 ## What an adversary still sees
 
@@ -126,7 +159,10 @@ two timestamp heuristics, completion, completed-job latency and TCP stream bytes
 It has no independent hosts, authenticated directory/links or comprehensive active
 attacker. The complete Katzenpost reference remains blocked by its private-key
 file requirements; see [assessment](REFERENCE.md). The first part of stage 1 is
-implemented; the remainder of stage 1 and stages 2–6 remain open.
+implemented; independent-host evaluation remains open. `fetch` now supplies a
+TLS-preserving proxy route, bounded binary bodies and per-client Tor isolation,
+which are initial pieces of stages 2 and 3. Covered fragmentation, persistent
+session/daemon APIs and the remaining release/proof work remain open.
 
 The [first process comparison](evidence/process-comparison/report.md) found an
 unfinished clean job and queued cover/work at epoch end. The immediate transport

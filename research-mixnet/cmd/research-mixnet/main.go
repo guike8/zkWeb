@@ -28,6 +28,8 @@ func run(ctx context.Context, args []string) error {
 			return compare(ctx, args[1:])
 		case "request":
 			return request(ctx, args[1:], os.Stdin, os.Stdout)
+		case "fetch":
+			return fetch(ctx, args[1:], os.Stdin, os.Stdout)
 		case "reference-check":
 			if len(args) != 1 {
 				return errors.New("reference-check accepts no arguments")
@@ -36,7 +38,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	if len(args) == 0 || args[0] != "demo" {
-		return errors.New("usage: zkweb request | demo | compare | reference-check")
+		return errors.New("usage: zkweb fetch | request | demo | compare | reference-check")
 	}
 	cfg := lab.DefaultConfig()
 	f := flag.NewFlagSet("demo", flag.ContinueOnError)

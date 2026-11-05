@@ -5,30 +5,38 @@ forked from zkAPI. Its scope is HTTP requests across the web: API CRUD, document
 fetches and application or agent egress. AI inference and private research are
 applications of the same request engine.
 
-The intended interface covers methods, URLs, headers, request bodies, response
-statuses and response bodies. The roadmap extends that interface to large and
-binary transfers, then evaluates streaming and session support. Transport privacy,
-anonymous access or payment proofs, and optional proofs about selected response
+The interface covers methods, origins/paths, headers, request bodies, response
+statuses and response bodies. The local client supports bounded binary transfers;
+the roadmap extends covered transfers, streaming and session support. Transport
+privacy, anonymous access or payment proofs, and optional proofs about selected response
 data have different trust assumptions and are separate parts of the design.
 
 ## What works today
 
-The [headless prototype](research-mixnet/README.md) carries `GET`, `HEAD`, `POST`,
-`PUT`, `PATCH`, `DELETE` and `OPTIONS` through scheduled local Sphinx/SURB links
-to a worker that makes an HTTPS request. It supports explicit headers, query
-strings and small UTF-8 bodies, with bounded responses and no automatic retries.
-Synthetic `demo` and `compare` commands exercise cover traffic and timing/fault
-measurements separately from real HTTP work.
+The [headless client](research-mixnet/README.md) supports `GET`, `HEAD`, `POST`,
+`PUT`, `PATCH`, `DELETE` and `OPTIONS` through two explicit modes:
 
-All mix nodes currently run on one machine, and the worker contacts the API
-directly. Each request and reply must fit one cell, including envelope overhead.
-This is a loopback transport prototype. It does not yet offer general browser
-compatibility, a production anonymity service, or ZK proofs for HTTP execution or
-responses. The inherited zkAPI proof and wallet stack is separate from this path.
+- `fetch` runs HTTP locally through an already-running loopback Tor/SOCKS5
+  proxy. TLS terminates at the local client and destination, so an application
+  worker does not receive plaintext credentials or bodies. It preserves binary
+  data, with 1 MiB body limits by default, configurable up to 16 MiB.
+- `request` carries a small UTF-8 exchange through scheduled local Sphinx/SURB
+  links to an HTTPS worker. Each request and reply must fit one cell, and the
+  worker sees the HTTP plaintext. Synthetic `demo` and `compare` commands
+  exercise cover traffic and timing/fault measurements separately.
+
+Both modes use explicit destinations and caller-supplied credentials, disable redirects and
+automatic retries, and report ambiguous delivery instead of repeating writes.
+`fetch` requires a configured proxy and has no direct fallback; it neither
+starts nor verifies Tor. Its Tor/SOCKS path has no Sphinx cover or ZK proof. The
+mixnet mode remains a single-machine experiment. Browser-wide compatibility,
+WebSockets/HTTP/3 and proof adapters remain future work; the inherited zkAPI
+wallet stack is separate.
 
 ```sh
 cd research-mixnet
 make build
+./bin/zkweb fetch --help
 ./bin/zkweb request --help
 make test
 ```
@@ -36,6 +44,7 @@ make test
 The module directory remains `research-mixnet/`; `research-mixnet` is also kept as
 a compatibility executable. Repository and upstream protocol identifiers retain
 their existing names. Read the [implementation research](docs/web-request-research.md),
+[local HTTPS client guide](docs/local-https-client.md),
 [architecture and milestones](research-mixnet/ARCHITECTURE.md),
 [request examples](research-mixnet/README.md#bounded-http-requests) and
 [application hypotheses](research-mixnet/APPLICATIONS.md).
