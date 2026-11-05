@@ -1,6 +1,10 @@
 /bin/
 /proof-verifier/target/
 /private-request/target/
+/zk-listener/target/
+/.zkweb-zk/
+*.g16
+credential.json
 /.zkweb-private/
 # Generated client secrets and other TFHE provisioning objects.
 *.tfhe

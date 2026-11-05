@@ -1,16 +1,14 @@
 # zkWeb headless prototype
 
-zkWeb is the working name for web requests whose private inputs stay encrypted
-while a cooperating destination processes them. The first private-request
-prototype combines TFHE-rs FHE with a mandatory zero-knowledge proof of correct
-input encryption. The destination verifies the proof, performs an encrypted
-lookup and returns a ciphertext that only the client decrypts.
+The current priority is a ZK authorization listener: a client generates a real
+Groth16 membership proof, the listener verifies it against the exact HTTP
+request and a one-use challenge, then executes CRUD on a persistent record store.
+The listener receives no credential secret, member index or Merkle path.
 
-The hidden input is an index `0..3` selecting one of `[11, 22, 33, 44]`. The
-endpoint and operation remain public. This is a real cryptographic prototype,
-not a production service or private CRUD support for unchanged websites. See
-the [private-request guide](../docs/private-requests.md) for the exact relation,
-key/CRS trust assumptions and limits.
+Request contents and the listener's stored records are plaintext. This closes
+the authorization loop first; FHE for hidden-input computation is deferred.
+The repository is [guike8/zkWeb](https://github.com/guike8/zkWeb). See the
+[listener guide](../docs/zk-listener.md) for the exact statement and trust model.
 
 The transport work builds on
 [Vitalik's zkAPI/Tor/rewriting experiment](https://x.com/VitalikButerin/status/2111046730959433793)
@@ -19,20 +17,22 @@ The fork starts at `vbuterin/zkapi` commit
 `0fb263b0da04986cfe5c63b12340c1581018ae9b`. The source directory, Go module path
 and upstream protocol identifiers retain their historical names.
 
-The other headless tools retain separate roles:
+The headless tools have separate roles:
 
 | Commands | Implemented role | Destination visibility |
 | --- | --- | --- |
+| `zk-setup`, `zk-listen`, `zk-request` | Groth16 anonymous group authorization before plaintext binary-record CRUD | Method, path, body, public group/profile and request metadata; no credential witness |
 | `private-setup`, `private-serve`, `private-query` | Offline provisioned, ZK-verified encrypted selector and FHE lookup over loopback HTTP | Ciphertext, proof and public protocol context; no plaintext selector or client secret key |
 | `fetch` | Bounded binary HTTPS over an already-running Tor/SOCKS5 proxy, with TLS between local client and origin | Ordinary HTTP request contents and account identity |
 | `request` | Small UTF-8 HTTP exchange over the loopback Sphinx/SURB experiment to an HTTPS worker | Worker and destination see ordinary HTTP request contents |
 | `verify` | Offline verification of an existing TLSNotary presentation | No request is issued; this does not hide inputs from their source website |
 | `demo`, `compare` | Synthetic transport jobs and aggregate measurements | Single-machine lab, not a production anonymity network |
 
-FHE hides the private selector; the ZK proof admits correctly formed encrypted
-inputs. It does not prove authorization or correct server computation. See the
-[current implementation research](../docs/web-request-research.md) for the
-different trust boundaries.
+The new listener proof establishes authorized group membership and binds the
+request; it does not encrypt request contents or prove honest server execution.
+The older FHE mode has a different input-encryption statement. See the
+[implementation research](../docs/web-request-research.md) for transport and
+encrypted-computation comparisons.
 
 ## Run
 
@@ -47,7 +47,7 @@ make test
 make vet
 make build
 ./bin/zkweb fetch --help
-./bin/zkweb private-query --help
+./bin/zkweb zk-request --help
 ./bin/zkweb demo
 
 # Same fixed schedules, with no jobs at all:
@@ -68,11 +68,12 @@ make compare
 ```
 
 `make build` produces `bin/zkweb` and the compatible `bin/research-mixnet`
-executable from the same source. This ordinary build includes the private
-command wrappers and help without Rust or TFHE dependencies. Each optional
-backend has its own Rust workspace: [private requests](#private-requests-with-a-cooperating-destination)
-use `make build-private`; [offline response verification](#offline-response-verification)
-uses `make build-proof`.
+executable from the same source. The ordinary build includes command wrappers
+and help without compiling Rust backends. Each optional backend has its own
+workspace: [ZK authorization](#zk-authorization-listener) uses `make build-zk`;
+[earlier FHE requests](#private-requests-with-a-cooperating-destination) use
+`make build-private`; [offline verification](#offline-response-verification)
+uses `make build-proof`. The ZK listener has no TFHE or wallet dependency.
 
 Build dependencies download over the network. `demo` and `compare` bind only
 literal `127.0.0.1` addresses and contact only those listeners. They accept no
@@ -82,7 +83,70 @@ returns a nonzero status for incomplete jobs. The `compare` command records
 incomplete jobs as measurements, since loss and disconnection are deliberate.
 Dropped observation events invalidate that trial's attack scores.
 
+## ZK authorization listener
+
+The optional `zkweb-zk-listener` backend uses BN254 Groth16 and Poseidon through
+pinned arkworks dependencies. Its separate circuit proves knowledge of a
+nonzero secret whose credential leaf belongs to the listener's Merkle root.
+The member index and four path siblings stay private. Public inputs are the
+group root, two 128-bit limbs preserving the full SHA-256 request digest, and a
+secret-dependent authorization tag with fresh private random blinding.
+
+The listener recomputes the digest from the actual method, record path and body,
+plus the pinned protocol/profile, fresh server instance, issued nonce and expiry.
+Both digest limbs participate in R1CS constraints; allocating an unused public
+signal would not bind it. The listener consumes a recognized nonce before
+expensive verification and executes no CRUD operation until the proof verifies.
+Randomized tags also avoid a stable credential tag when a context is repeated.
+
+```sh
+# From research-mixnet after make build; Rust 1.99 is required.
+make build-zk
+./bin/zkweb zk-setup --output /tmp/zkweb-zk-demo --members 4
+./bin/zkweb zk-listen \
+  --server-dir /tmp/zkweb-zk-demo/server \
+  --state-file /tmp/zkweb-zk-records.json \
+  --listen 127.0.0.1:0
+```
+
+Keep the listener running and substitute its READY URL's port:
+
+```sh
+./bin/zkweb zk-request --client-dir /tmp/zkweb-zk-demo/client-0 \
+  --url http://127.0.0.1:PORT --method POST --key note --data 'hello'
+./bin/zkweb zk-request --client-dir /tmp/zkweb-zk-demo/client-0 \
+  --url http://127.0.0.1:PORT --method GET --key note
+./bin/zkweb zk-request --client-dir /tmp/zkweb-zk-demo/client-0 \
+  --url http://127.0.0.1:PORT --method PUT --key note --data 'updated'
+./bin/zkweb zk-request --client-dir /tmp/zkweb-zk-demo/client-0 \
+  --url http://127.0.0.1:PORT --method DELETE --key note
+make test-zk
+```
+
+POST creates, GET reads, PUT replaces and DELETE removes a record. Text and
+`--data-file` preserve exact bytes up to the body limit. A member may access all
+records: this is a common authorization group, not per-user ownership. Clients
+send one request without automatic retries; an interrupted mutation can have an
+unknown outcome. The listener stores records durably and holds an exclusive
+state-file lock.
+
+Trusted offline setup creates 1–16 client credentials, defaulting to four.
+Give the listener only `server/`, containing a verifying key and public manifest;
+keep each `client-N/` credential private. The proving key is public material.
+The provisioner knows credential secrets and can impersonate members. Honest
+setup is required; there is no production multiparty ceremony. Filesystem modes
+and separate processes do not isolate secrets from a common host administrator.
+
+Only numeric loopback HTTP endpoints are enabled. The listener sees request
+contents; an observer still sees endpoint/IP, timing, sizes and the shared
+profile. Anonymous group authorization does not supply network anonymity,
+request encryption, server response proofs or an authenticated remote service.
+See the [detailed listener guide](../docs/zk-listener.md).
+
 ## Private requests with a cooperating destination
+
+This retained v1 FHE lookup is separate from the current authorization-listener
+priority. Expanded FHE CRUD work is deferred on a separate development branch.
 
 The optional `zkweb-private` backend pins TFHE-rs 1.8.2. It uses full upstream
 computation, compact-public-key-encryption and key-switching parameters, with no
@@ -380,13 +444,12 @@ This is not a cap on TCP wire bytes and not a provider-cost estimate.
 
 ## Limits and next work
 
-The private-request priority is to extend useful cooperating-server functions,
-evaluate malicious-server behavior and result integrity, and define encrypted
-state updates before claiming private CRUD. Input-proof verification alone
-does not prove correct FHE execution. A remote deployment also needs a reviewed
-profile-registration/provisioning and authenticated transport design. The
-current loopback example exposes endpoint/session/IP/timing/size metadata and
-adds no network anonymity or production ceremony.
+The current priority is to complete and review the ZK listener's authorization,
+credential provisioning, challenge/replay and mutation-recovery boundaries.
+Remote authenticated deployment, membership rotation/revocation and per-record
+ownership need explicit designs. FHE is deferred separately; the retained
+four-entry lookup does not hide general HTTP requests or supply encrypted CRUD.
+Input authorization proofs do not prove honest execution of a server response.
 
 The separate transport experiments have their own remaining work.
 The demo uses one process; the comparison uses separate address spaces under one
@@ -403,8 +466,9 @@ separate `fetch` mode already supports bounded binary HTTPS through a proxy,
 with different timing and trust assumptions. Streaming, WebSockets, CONNECT,
 persistent application sessions and integrated proof capture require separate
 designs and acceptance tests. The offline TLSNotary verifier is an initial
-response-verification adapter; HTTP/application claims, request binding and
-anonymous access/payment admission are not integrated. X25519 here is not
+response-verification adapter; its HTTP claim parsing and fetch binding remain
+future work. Wallet/payment admission is separate from the new common-group
+listener authorization. X25519 here is not
 post-quantum protection, and Sphinx encryption is not a ZK execution proof.
 
 See [architecture and production milestones](ARCHITECTURE.md),

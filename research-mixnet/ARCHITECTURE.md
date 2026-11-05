@@ -1,45 +1,108 @@
 # zkWeb: architecture and milestones
 
-zkWeb's primary goal is to let a cooperating web destination process a request
-without learning its private input. The current prototype combines TFHE-rs
-fully homomorphic encryption with a mandatory zero-knowledge proof of correct
-input encryption. The destination verifies the proof before computing over an
-encrypted selector and returns an encrypted result for local decryption.
+The current priority is a complete ZK authorization loop: a client proves
+membership, the listener verifies the proof against the exact HTTP request and
+an issued one-use challenge, then it executes CRUD. Request bodies and the
+listener's database remain plaintext at this stage. FHE for hidden-input
+computation is deferred separately.
 
-The implemented function is a read from the public table `[11, 22, 33, 44]` with
-a hidden index in `0..3`. This fixed function is the first complete private
-request, not generic encrypted CRUD or compatibility with unchanged websites.
-Useful private reads and writes require destination logic and state protocols
-designed for encrypted computation. See the
-[private-request guide](../docs/private-requests.md) for commands and trust
-boundaries.
-
-The existing Tor/SOCKS5 HTTPS client, local Sphinx/SURB experiment and offline
-TLSNotary verifier remain separate tools. Transport privacy does not conceal a
-plaintext HTTP payload from the destination, and transcript attestation does
-not make its source execute an encrypted request. The
-[implementation research](../docs/web-request-research.md) compares these roles.
+The listener has a distinct BN254 Groth16 circuit and profile; it does not
+require the inherited wallet's note/deposit/state machinery or TFHE. The
+retained Tor/SOCKS, Sphinx/SURB, earlier FHE lookup and TLSNotary tools keep their
+own boundaries. See the [listener guide](../docs/zk-listener.md).
 
 ## Separate responsibilities
 
 | Part | Intended responsibility | Current status |
 | --- | --- | --- |
-| Private computation | Keep private inputs encrypted during destination processing and return an encrypted result. | `private-query` proves encryption of a two-bit selector; `private-serve` verifies it and evaluates a four-record lookup using TFHE-rs. Loopback HTTP only; no proof of correct server evaluation. |
-| Proof admission and profiles | Accept only conformant, verified encrypted inputs under registered keys, parameters and request context. | Offline setup separates client secret from server evaluation material; profile hashes pin configuration/CRS/keys. Expiring one-use challenges bind proofs to a fresh server instance. Honest provisioning/CRS generation is assumed. |
-| General HTTP interface | Preserve HTTP method, origin/path/query, allowed headers, body, status and response data when the destination processes ordinary HTTP. | Seven methods and a pinned HTTPS origin; `fetch` preserves bounded binary bytes, while `request` supports small UTF-8 bodies and one request per fixed epoch. Destinations receive plaintext application inputs. |
-| Transport | Hide client/request linkage under an explicit adversary model, with mode-specific latency and bandwidth tradeoffs. | `fetch` uses an explicit loopback Tor/SOCKS5 route with client-to-origin TLS and no direct fallback; `request` uses scheduled loopback Sphinx links with cover. Neither is an independently evaluated anonymity service operated by this project. |
-| Session and credential controls | Scope credentials, cookies, destinations and retained state to a caller-selected context. | Origin-scoped reusable client with per-client Tor isolation state, explicit headers and no ambient cookie jar or environment proxy; persistent session/daemon APIs remain future work. |
-| Anonymous access or payment | Prove eligibility or spending authority without exposing unnecessary identity. | Inherited zkAPI wallet/proof components exist separately; the HTTP worker has no access-proof or billing integration. |
-| Optional response verification | Authenticate selected web transcript data with a defined verifier and trust model, then support explicit application claims. | Partially implemented: optional `zkweb verify` checks existing TLSNotary alpha.15 presentations offline against caller-pinned notary/server/time policy and returns selected authenticated byte ranges. Capture, HTTP claims and request/challenge binding remain future work. |
-| Applications | Offer useful private functions and client interfaces above the relevant protocol. | Private lookup CLI plus separate `fetch`, `request`, verification and transport tools; general encrypted state updates and browser integration remain future work. |
+| ZK authorization | Prove possession of an authorized secret without sending the member identity or Merkle path. | A depth-four membership circuit and randomized, request-bound authorization tag; listener verifies before CRUD. |
+| Application CRUD | Create, read, replace and delete bounded binary records. | POST/GET/PUT/DELETE at the listener; request contents and durable records are plaintext. All authorized members share access to the records. |
+| Profiles and replay | Pin the verification statement and reject reused or wrong-context authorization. | Trusted offline setup, hash-pinned roles, verifying material only at the listener, and bounded expiring one-use challenges bound to a fresh server instance. |
+| Private computation | Compute over request inputs while hiding them from the destination. | Deferred. The retained optional FHE mode is a four-value lookup; separate encrypted-CRUD work is not bundled into this listener milestone. |
+| General HTTP interface | Preserve ordinary HTTP method, origin/path, headers, body, status and bytes. | Separate fetch/request modes; destinations receive ordinary plaintext inputs. |
+| Transport | Address network linkage under an explicit adversary model. | Explicit Tor/SOCKS route or scheduled local Sphinx experiment; neither inherits anonymity from the authorization proof. |
+| Session and credential controls | Scope destination credentials and retained state. | Transport contexts remain separate from a member credential; no ambient proxy or cookie jar is used by the listener client. |
+| Wallet/payment | Prove spending authority and integrate funded usage. | Inherited zkAPI components remain separate; group authorization does not spend deposits or bypass wallet deployment gates. |
+| Response verification | Authenticate selected web transcript facts under a stated trust model. | Optional offline TLSNotary verification; it does not prove this listener's CRUD execution or bind a separate fetch automatically. |
 
-FHE supplies confidentiality for the selector and result. The ZK input proof
-enforces a relation about correct encryption; it supplies neither account
-authorization nor proof of the server's output. Anonymous eligibility and
-payment proofs are different statements. Each mode must state which property
-it actually supplies.
+## ZK authorization protocol
 
-## Private request protocol
+### Setup and roles
+
+The isolated `zk-listener/` Rust workspace builds `zkweb-zk-listener` through
+`make build-zk`; `make test-zk` is its acceptance entry point. The Go wrappers
+`zk-setup`, `zk-listen` and `zk-request` invoke that fixed sibling executable.
+The ordinary Go build includes help/wrappers without compiling Rust. The
+backend has no TFHE or wallet-workspace dependency.
+
+Trusted offline setup creates one common depth-four Merkle group with 1–16
+members, defaulting to four. It generates nonzero random secrets, each member's
+private path and a fresh circuit-specific Groth16 setup. The listener receives
+only its verifying key and public manifest. A client receives its own credential
+and public proving key. Role directories/files use create-new semantics and
+0700/0600 modes. Keys and credential files are bounded, hash-pinned and validated
+before use; compressed cryptographic objects reject trailing bytes.
+
+The provisioner knows member secrets and can impersonate members. The common
+reference string must be generated honestly; no production multiparty ceremony
+is claimed. Giving a destination the whole setup exposes client credentials.
+A shared operating-system administrator is outside the process/file boundary.
+
+### Circuit statement
+
+Private witnesses are a nonzero credential secret, four Merkle siblings, four
+leaf-position bits, and fresh per-proof tag blinding. Public inputs, in order,
+are the authorization root, two 128-bit limbs preserving a complete SHA-256
+request digest, and an authorization tag. The circuit constrains:
+
+1. The secret's domain-separated Poseidon leaf and private path reach the root.
+2. Both digest limbs are 128-bit values.
+3. The tag equals Poseidon of its authorization domain, that same secret, both
+   digest limbs and the fresh private blinding.
+
+The public request digest participates in constraints; an unused public signal
+would not bind a proof. The native and R1CS Poseidon helpers share BN254 rate 2,
+capacity 1, alpha 5, eight full rounds and 57 partial rounds, following the
+existing repository primitives with separate listener domains. Groth16 proofs
+use the randomized prover, compressed 128-byte encoding and validated curve
+points. This statement is distinct from wallet funding and correct encryption.
+
+Fresh private tag blinding avoids a stable credential tag even if a request
+context is repeated. The nonce cache still supplies replay rejection; the tag
+is not a wallet-spend nullifier. No claim follows about IP, timing, request
+contents or a colluding endpoint's other identifying observations.
+
+### HTTP acceptance and state
+
+1. GET `/challenge` returns the pinned protocol/profile, fresh server instance,
+   random nonce and expiry. The client validates the profile and lifetime.
+2. The client hashes a length-prefixed, domain-separated transcript containing
+   the actual method, record path and body plus that challenge context.
+3. The client creates a membership proof and sends the ordinary HTTP CRUD
+   request with proof, tag and challenge headers; it sends no credential witness.
+4. The listener reconstructs the digest from the actual received bytes and its
+   cached challenge. It consumes a recognized challenge before expensive proof
+   verification and rejects incorrect profiles, contexts, tags and proofs.
+5. Only successful authorization reaches record lookup or mutation. POST
+   creates, GET reads, PUT replaces and DELETE removes a record. The durable
+   store uses an exclusive lock and atomic snapshot replacement.
+
+Challenges expire after 120 seconds and the cache is bounded. Restarting uses a
+new server instance, preventing an old proof from becoming valid in a fresh
+cache. The client never automatically repeats a request: a lost response can
+follow a committed mutation. Persistence failure must stop the instance until
+recovery rather than permit divergent in-memory and durable state.
+
+Only numeric loopback HTTP endpoints are enabled. The listener sees the method,
+path, body and results, and all group members may access every record. This is
+not a per-user ownership policy, network anonymity, proof of honest server
+execution, or authenticated remote deployment. Those are separate requirements.
+
+## Retained FHE input-proof prototype
+
+This optional v1 lookup is retained independently. Expanded encrypted CRUD is
+deferred on local development branch `feat/encrypted-crud` at `c7d9cb9`; it is
+not merged into this authorization-listener branch.
 
 ### Setup and pinned context
 
@@ -230,8 +293,10 @@ It has no payment authorization, wallet custody or zkAPI lease integration.
 
 | Decision | Reason and limitation |
 | --- | --- |
-| ZK-proven TFHE compact encryption and FHE lookup | Reuse an existing library for private input processing and mandatory proof admission. The two-bit selector hides one of four choices; this proves neither authorization nor server output correctness. |
-| Offline pinned client/server profiles | Keep the client decryption secret out of destination material and bind proof verification to configured keys/CRS. Honest provisioning and CRS generation are assumed; the demo is not a ceremony or host sandbox. |
+| Distinct Groth16 membership authorization circuit | Bind an authorized secret and private path to the exact request digest with a fresh privately blinded tag. All public digest limbs are constrained; this is not the wallet's payment circuit. |
+| Separate verifier and member profiles | Give the listener only verification material while clients keep credential witnesses. A trusted offline provisioner can impersonate members; hash pins are not an honest-setup proof. |
+| Retain the separate TFHE input-proof lookup | Preserve earlier work while FHE is deferred. The two-bit selector hides one of four choices; this proves neither authorization nor server output correctness. |
+| FHE offline pinned client/server profiles | Keep the client decryption secret out of destination material and bind verification to configured keys/CRS. Honest provisioning is assumed; the example is not a ceremony or host sandbox. |
 | Fresh instance and expiring one-use challenges | Bind proofs to one server context and constrain request replay. Does not provide general response freshness, exactly-once writes or verifiable evaluation. |
 | Use Katzenpost Sphinx/SURBs | Reuse packet cryptography rather than invent an onion format; does not reuse a complete deployed mixnet or inherit its anonymity analysis. |
 | Independent forward and reverse schedules | A variable or direct response stream would expose job completion patterns. |
@@ -260,19 +325,16 @@ Long-term intersection and confirmation attacks need evaluation too.
 
 | Stage | Deliverable | Evidence before advancing |
 | --- | --- | --- |
-| 0: complete private read | Current four-record lookup with ZK-verified encrypted input, HTTP acceptance, FHE evaluation and local result decryption | Real cryptographic checks and HTTP round trips for all selectors; reject tampered/wrong-context proofs, empty or wrong-type lists, malformed objects, expired/replayed challenges and incompatible profiles before evaluation. Measure setup/proving/evaluation cost without weakening parameters. |
-| 1: independent operator boundary | Reviewed provisioning, profile/key registration, authenticated remote deployment and client secret handling | Separate-host runs with destination material containing no client secret; explicit CRS/key trust and rotation model, resource/DoS limits, session linkage and metadata measurements. Loopback integration is not this evidence. |
-| 2: useful private reads and result integrity | Larger/private query functions plus a selected integrity design for malicious destinations | Specify the public/private inputs and precise proof relation per function. Evaluate output-correctness proofs or authenticated retrieval against the required trust model; demonstrate detection of wrong or stale results rather than relying on input proof verification. |
-| 3: encrypted state and CRUD | Cooperating-server create/update/delete protocols with encrypted inputs and explicit public leakage | Define state consistency, authorization, access-pattern leakage, concurrency, replay, idempotency, exactly-once limits and recovery. Prove the required input relations and validate state transitions; no automatic retry of ambiguous mutations. |
-| 4: usable private service interfaces | Local client API and selected transport integration for supported encrypted functions | Separate concurrent callers and keys, preserve client secrets, bound resources and cancellation, and assess what IP/timing/session identifiers disclose. Transport anonymity and payment admission require independent evidence. |
-| 5: broader service adaptation | Reusable encrypted functions and integration patterns for additional cooperating backends | Establish per-function semantics, computation cost and privacy/correctness guarantees. Ordinary unmodified websites remain outside this capability unless their protocol changes. |
-| 6: reviewed release | Reproducible optional backend packages and reviewed cryptographic, setup and deployment boundaries | Independent review, dependency/parameter pins, side-channel assessment and lifecycle/recovery tests. Compatible zkAPI funding is separate and requires its own ceremony/deployment/proof compatibility; no development setup substitution. |
+| 0: ZK listener loop | Client membership proof → challenge-bound listener verification → durable CRUD | Real Groth16 proofs; all CRUD methods; unauthorized, tampered, replayed and wrong-context requests rejected before application execution; binary values and mutation recovery. |
+| 1: credential lifecycle | Reviewed enrollment, group updates and member-secret handling | Explicit revocation/rotation, pinned setup/profile distribution, issuer trust and independent credential generation where required. |
+| 2: remote deployment | Authenticated transport and reviewed operating boundary | Separate-host tests, resource/admission controls, clear IP/timing/profile leakage and trusted profile distribution; loopback is not this evidence. |
+| 3: application policy and integrity | Required ownership scopes and response/state guarantees | Define which authorized member may affect which data, concurrent mutation semantics, lost-reply reconciliation and malicious-server behavior. Input authorization alone is not an execution proof. |
+| 4: resume FHE | Cooperating encrypted reads/writes layered with the required authorization | Revisit the separate encrypted-CRUD work, its exact input proof, operation/access leakage, key/CRS trust, state consistency and measured cost. |
+| 5: reviewed release | Reproducible packages and independently reviewed proof/setup/deployment boundaries | Dependency pins, setup review, lifecycle/recovery tests and an explicit adversary model. Funded-wallet integration retains its separate release gates. |
 
-The current private-read implementation is intentionally small enough to state
-its exact relation and leakage. `make test-private` is the acceptance entry
-point for its cryptography and real HTTP path. The protocol is experimental;
-no production security review, remote deployment or benchmark is implied by
-the code being present.
+This branch closes the authorization loop first. The optional FHE lookup has a
+different statement and acceptance entry point (`make test-private`). Neither
+source presence nor local tests establish a production security review.
 
 ### Separate transport and verification work
 

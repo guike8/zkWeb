@@ -1,18 +1,23 @@
-# zkWeb: destination-private requests and encrypted computation
+# zkWeb: request authorization and private computation
 
-Research date: **2026-11-05**. zkWeb is the working product name for this fork.
+Research date: **2026-11-05**. The repository is now `guike8/zkWeb`.
 This brief compares original specifications, project documentation and source
 repositories. It is an implementation shortlist, not an independent audit or
 an exhaustive survey. Research used OpenCLI searches and original-page reads.
 
 ## Product decision
 
-The clarified goal is to **hide request inputs from the destination that
-processes them**. This requires encrypted computation on a cooperating backend,
-not merely routing the request anonymously or proving facts about its response.
-The first implementation combines fully homomorphic encryption (FHE) with a
-mandatory ZK proof of valid encrypted input. API CRUD, document fetching and
-agent tools remain longer-term applications of this direction.
+The immediate priority is a **ZK authorization listener**: close the loop from
+client proof generation through listener verification to persistent HTTP CRUD.
+The client proves membership in an authorized group without sending its member
+secret, tree path or index. The proof binds the exact method, path and body to
+the listener profile and a fresh one-use challenge. Request contents are visible
+to this listener; this is the explicitly selected first stage.
+
+Keeping request contents hidden while the destination computes remains a
+separate encrypted-computation goal. Further FHE work is deferred while the ZK
+listener path is established. The earlier FHE lookup remains an independent
+experiment, rather than a dependency of authorization.
 
 The compatibility goal is broad HTTP(S) support: methods, destinations, paths,
 queries, explicit headers, exact request/response bytes, session contexts and,
@@ -119,11 +124,12 @@ result or a claim that any one dependency has been independently audited here.
 
 ## Where this repository stands
 
-Implementation follow-through on 2026-11-05 adds a cooperating encrypted-query
-backend alongside the existing HTTP transports and optional response verifier:
+Implementation follow-through on 2026-11-05 adds a ZK authorization listener
+alongside the existing encrypted-query experiment, HTTP transports and verifier:
 
 | Mode | Implemented behavior | Boundary |
 | --- | --- | --- |
+| `zkweb zk-setup`, `zk-listen`, `zk-request` | A distinct BN254 Groth16 circuit proves secret-credential Merkle membership and constrains both 128-bit halves of the exact HTTP request digest. A fresh privately blinded tag is public; the listener consumes its nonce before verifying and executes CRUD only after acceptance. | Trusted offline setup and credential provisioning, 1–16 members, loopback HTTP and bounded binary records. The listener sees the request and stored values; IP/timing/profile remain visible. All group members share record access. See the [listener guide](zk-listener.md). |
 | `zkweb private-setup`, `private-serve`, `private-query` | TFHE-rs encrypted selector, mandatory context-bound input proof, server-side homomorphic lookup and client-only decryption. Client and server profiles are separated. | Four public records, one private selector in 0–3, loopback HTTP prototype, trusted offline setup. No arbitrary hidden HTTP/CRUD, network anonymity or proof of correct server output. See the [private request guide](private-requests.md). |
 | `zkweb fetch` | Local HTTP/1.1 over an explicit Tor/SOCKS5 TCP route, client-to-origin TLS, remote destination DNS, exact binary bodies, repeated headers and an origin-scoped reusable client. | Requires an already-running trusted loopback proxy and its resolved-address policy. Bodies default to 1 MiB, configurable up to 16 MiB. No cover schedule or ZK proof is attached to this mode. |
 | `zkweb request` | Seven methods and bounded UTF-8 requests through scheduled local Sphinx/SURB links to a direct HTTPS worker. | Worker receives plaintext requests and credentials. Frames carry at most 4,090 bytes of application data including the request's reply envelope; all mix nodes remain on one machine. |
@@ -174,11 +180,11 @@ deployment pins.
 
 | Priority | Deliverable | Evidence required |
 | --- | --- | --- |
-| 1 | Extend encrypted computation beyond the four-record lookup | Define each encrypted input/output and ZK statement; measure setup, proof, verification, evaluation and wire costs with real parameters. |
-| 2 | Authenticate encrypted computation results | Define the malicious-server model and prove or otherwise authenticate the selected function and returned result. An input proof alone cannot do this. |
-| 3 | Add encrypted state and CRUD on a cooperating service | Specify access-pattern leakage, authorization, state commitments, concurrency, replay and mutation recovery. Ordinary plaintext CRUD is not evidence of hidden writes. |
-| 4 | Add deployment and network privacy around encrypted requests | Independent client/server hosts, authenticated profile distribution, quotas, bounded resource use and explicit transport guarantees. |
-| 5 | Extend existing transports, anonymous admission and response attestations as distinct adapters | Preserve byte, TLS, replay, context and verifier checks; document which adapter protects which party's information. |
+| 1 | Establish the ZK authorization listener loop | Real proofs from different authorized members, altered method/path/body and wrong-group rejection, one-use challenges, persistent CRUD, recovery and real CLI integration. |
+| 2 | Extend listener deployment and admission policy | Authenticated remote transport, credential rotation/revocation, service quotas and application-specific group scopes. |
+| 3 | Resume encrypted state and CRUD after the authorization loop | Define each encrypted input/output and proof statement; measure computation and wire cost; specify access-pattern leakage, state commitments and mutation recovery. |
+| 4 | Authenticate encrypted computation results | Define the malicious-server model and prove or otherwise authenticate the selected function and returned result. An input authorization proof alone cannot do this. |
+| 5 | Extend network privacy and response attestations as distinct adapters | Preserve byte, TLS, replay, context and verifier checks; document which adapter protects which party's information. |
 
 The existing mutation rule remains: a lost response can leave the remote side
 effect committed. ZK provenance does not fix this. Preserve `delivery_unknown`

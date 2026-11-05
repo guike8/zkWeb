@@ -32,6 +32,12 @@ func run(ctx context.Context, args []string) error {
 			return fetch(ctx, args[1:], os.Stdin, os.Stdout)
 		case "verify":
 			return verify(ctx, args[1:], os.Stdin, os.Stdout)
+		case "zk-setup":
+			return zkCommand(ctx, "setup", args[1:], os.Stdout)
+		case "zk-listen":
+			return zkCommand(ctx, "listen", args[1:], os.Stdout)
+		case "zk-request":
+			return zkCommand(ctx, "request", args[1:], os.Stdout)
 		case "private-setup":
 			return privateCommand(ctx, "setup", args[1:], os.Stdout)
 		case "private-serve":
@@ -46,7 +52,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	if len(args) == 0 || args[0] != "demo" {
-		return errors.New("usage: zkweb private-setup | private-serve | private-query | fetch | verify | request | demo | compare | reference-check")
+		return errors.New("usage: zkweb zk-setup | zk-listen | zk-request | private-setup | private-serve | private-query | fetch | verify | request | demo | compare | reference-check")
 	}
 	cfg := lab.DefaultConfig()
 	f := flag.NewFlagSet("demo", flag.ContinueOnError)
