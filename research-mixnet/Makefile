@@ -7,8 +7,9 @@ test:
 vet:
 	go vet ./...
 build:
-	go build -trimpath -o bin/research-mixnet ./cmd/research-mixnet
+	go build -trimpath -o bin/zkweb ./cmd/research-mixnet
+	ln -sf zkweb bin/research-mixnet
 demo:
 	go run ./cmd/research-mixnet demo
 compare: build
-	./bin/research-mixnet compare --output-dir evidence/process-comparison
+	./bin/zkweb compare --output-dir evidence/process-comparison

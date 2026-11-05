@@ -36,7 +36,7 @@ func requestWithExchange(ctx context.Context, args []string, in io.Reader, out i
 	f.DurationVar(&cfg.MeanDelay, "mean-delay", cfg.MeanDelay, "mean residence time (0–250ms)")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			if _, err := fmt.Fprintln(out, "usage: research-mixnet request --target HTTPS_ORIGIN --input FILE|- [--rate 8 --duration 12s --mean-delay 50ms]"); err != nil {
+			if _, err := fmt.Fprintln(out, "usage: zkweb request --target HTTPS_ORIGIN --input FILE|- [--rate 8 --duration 12s --mean-delay 50ms]"); err != nil {
 				return errors.New("cannot write request help")
 			}
 			f.SetOutput(out)

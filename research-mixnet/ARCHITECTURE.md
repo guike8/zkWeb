@@ -1,31 +1,58 @@
-# Private research daemon: architecture and milestones
+# zkWeb: architecture and milestones
 
-Selected first product: a headless research daemon. Its useful unit is an
-asynchronous research job, not a remotely streamed keystroke-by-keystroke chat.
+zkWeb is the working name for a general web request privacy toolkit. The request
+engine is the product foundation: API CRUD, web fetching, private application
+egress and AI/research workflows use the same method, destination, headers,
+body and response interface. Supporting the breadth of web requests is the
+direction, rather than a claim of universal compatibility today.
 
-## Intended flow
+The current implementation is a local Sphinx/SURB transport experiment with a
+bounded HTTPS worker. Large and binary bodies, streaming, browser sessions and
+optional proofs remain design work. The [implementation research](../docs/web-request-research.md)
+compares existing systems and their trust boundaries.
 
-1. A local client submits a goal over an authenticated local API or owner-only
-   Unix socket. The daemon keeps the goal, identity mapping and retained notes local.
-2. A genuinely local model plans the work and constructs the minimum question
-   needed for each remote task. A deterministic secret detector and a task-specific
-   transformation operate across all outgoing fields, including tool results,
-   instructions, document metadata and URLs. Failures stop transmission.
-3. An explicit local job context scopes alias maps, provider credentials, budgets
-   and transport state. Do not rely on the upstream previous-history heuristic
-   as a multi-user or multi-job isolation boundary.
-4. Jobs enter bounded, padded cells on a traffic schedule selected before the
-   session. Cells traverse independently operated mixes; cover fills spare slots.
-5. A worker obtains only the required task and return capability. A separate
-   adapter handles zkAPI authorization, without giving relays wallet custody.
-6. The worker returns bounded answer cells over SURBs. The local daemon checks
-   completion, restores locally held context, follows citations and synthesizes.
-   Public sources must support reported claims. A rewrite must not invent facts.
+## Separate responsibilities
 
-That complete flow is a design target. Encrypted transport, synthetic worker
-plumbing and a separate-process comparison harness have been implemented. A
-separate opt-in `request` command now exercises bounded CRUD HTTP work over the
-local transport; it is an adapter experiment, not the research alpha.
+| Part | Intended responsibility | Current status |
+| --- | --- | --- |
+| Request interface | Preserve HTTP method, origin/path/query, allowed headers, body, status and response data. | One explicit public HTTPS origin, seven methods, small UTF-8 bodies, one request per fixed epoch. |
+| Transport | Hide client/request linkage under an explicit adversary model, with mode-specific latency and bandwidth tradeoffs. | Scheduled, fixed-size loopback Sphinx links with cover and SURB replies; no independent operators or deployed anonymity service. |
+| Session and credential controls | Scope credentials, cookies, destinations and retained state to a caller-selected context. | Explicit envelope headers, no ambient cookie jar or environment proxy; no persistent session API. |
+| Anonymous access or payment | Prove eligibility or spending authority without exposing unnecessary identity. | Inherited zkAPI wallet/proof components exist separately; the HTTP worker has no access-proof or billing integration. |
+| Optional response verification | Establish selected facts about authenticated response data with a defined verifier and trust model. | Not implemented; evaluate existing zkTLS/notary protocols before choosing an adapter. |
+| Applications | Offer browser/tool interfaces, private research and other workflows above the request engine. | CLI request mode plus synthetic transport experiments; research planning is a future application. |
+
+A zero-knowledge eligibility proof does not hide authenticated account identity
+from an API, and a proof about selected response data does not itself anonymize
+the request. Sphinx encryption supplies neither of those proofs. The engine must
+state which property a selected mode provides rather than labeling all web
+traffic as zero knowledge.
+
+## Intended general request flow
+
+1. A client submits a request and explicit context over a local interface. The
+   context scopes destinations, credentials, budgets and any retained session
+   state. The current CLI is the initial interface; a local daemon API is future
+   work.
+2. The engine validates the request, target policy and resource budget. It
+   preserves HTTP semantics. Optional application-specific transformations must
+   not silently rewrite arbitrary URLs, JSON, binary data or authentication.
+3. A caller selects a transport whose documented threat model and latency fit
+   the task. Covered asynchronous delivery and interactive streaming have
+   different scheduling requirements; neither inherits the other's guarantees.
+4. A worker or egress endpoint reaches the configured destination. An optional
+   access/payment adapter may authorize service independently of request
+   contents; that adapter must not give relays custody of a wallet.
+5. Responses return through the selected transport with bounded resource use and
+   explicit completion or unknown-delivery semantics. Optional selective
+   verification is a separate protocol step, with its own trust assumptions.
+6. Applications consume the response. A research application may retain a local
+   objective, minimize questions, restore local context and verify citations; an
+   API client may need exact bytes and session continuity instead.
+
+This flow is a design target. Only the bounded loopback request exchange below
+is implemented. The previous headless research-daemon concept is an application
+on top of this engine, not a restriction on general request operations.
 
 ## Opt-in HTTP adapter experiment
 
@@ -87,10 +114,11 @@ Long-term intersection and confirmation attacks need evaluation too.
 | --- | --- | --- |
 | 0: local transport | Current headless loopback lab | Fixed sizes, idle traffic in both directions, real SURB replies, replay rejection, queue bounds, no catch-up, cancellation; race tests and captured aggregate demo results. |
 | 1: network experiment | Separate relay processes and independently operated hosts; authenticated links and directory | Test operator compromise, active timing perturbation, drops, flooding, route churn, replay across restart, key rotation and population size. Prefer using the complete Katzenpost/Nym transport stack where possible. |
-| 2: bounded research protocol | Fragmented jobs/results, expiring single-use reply capabilities, constant response polling/scheduling, bounded reassembly and acknowledgements | Malformed/reordered/duplicate fragment tests, resource caps, cancelled jobs, delayed answers, replayed replies and lost epochs. No immediate job-dependent retries. |
-| 3: local content controls | Local rewrite/planning model, per-job aliases, secret detection for every egress field, local rehydration and source verification | Raw vs redaction-only vs rewrite vs task-specific transformation comparisons. Measure semantic correctness, citation fidelity, intent/identity inference and tool-output leakage. Do not label prose rewriting as encryption. |
-| 4: useful research alpha | Read-only search/source connectors behind capabilities; model-independent local jobs API | Primary-source research tasks, query/document minimization, prompt-injection tests, host allowlists, SSRF/DNS controls, redirect handling and measured p50/p95 end-to-end cost/latency. |
-| 5: funded release | Matching reviewed zkAPI deployment, proving artifacts, recovery tooling, signed reproducible packages | Ceremony and code/proof pins, exact-release deposit/request/settlement/independent-exit tests, upstream withdrawal fix, conservative spend caps and tested backups. No development setup substitution. |
+| 2: general bounded HTTP protocol | Large/binary request and response framing, expiring reply capabilities, bounded reassembly and explicit completion | Exact-byte HTTP fixtures; malformed/reordered/duplicate fragment tests; resource caps, cancellation, replay and lost epochs. Mutation outcomes remain unknown without a reply; no automatic retry of ambiguous writes. |
+| 3: contexts and useful request alpha | A local request API with scoped credentials, sessions, target capabilities and transport selection | Separate concurrent callers and accounts; prevent cookie/auth cross-context leakage; test CRUD, document fetches, SSRF/DNS policies and redirect policy. Measure cost/latency without claiming all-site compatibility. |
+| 4: extended web semantics | Reviewed streaming, WebSocket/CONNECT and browser integration designs where justified by transport choice | Long-lived cancellation/backpressure tests, bounded buffers, replay and recovery analysis, and mode-specific metadata/timing measurements. Do not apply asynchronous cover claims to interactive modes without evidence. |
+| 5: optional proof adapters | Anonymous access/payment proofs and optional selective verification of authenticated web data | First select protocols from the implementation research; define statements, verifier trust, freshness and replay binding, then run independent implementation/review tests. Neither adapter is implemented in the generic HTTP path. |
+| 6: release and optional funded integration | Reviewed transport deployment and reproducible packages; compatible zkAPI stack only when that payment adapter is selected | Independent-host adversary evaluation and release recovery tests; for zkAPI funding, ceremony/code/proof pins, exact-release deposit/request/settlement/exit tests and conservative spend caps. No development setup substitution. |
 
 Stage 1 now has a process-isolated, synthetic 16-client comparison with clean,
 provider-delay, worker-ingress-loss and client-disconnect scenarios. It measures
@@ -98,7 +126,7 @@ two timestamp heuristics, completion, completed-job latency and TCP stream bytes
 It has no independent hosts, authenticated directory/links or comprehensive active
 attacker. The complete Katzenpost reference remains blocked by its private-key
 file requirements; see [assessment](REFERENCE.md). The first part of stage 1 is
-implemented; the rest of stages 1–5 remain open.
+implemented; the remainder of stage 1 and stages 2–6 remain open.
 
 The [first process comparison](evidence/process-comparison/report.md) found an
 unfinished clean job and queued cover/work at epoch end. The immediate transport
@@ -113,8 +141,15 @@ address: existing notes always require their original compatible stack.
 
 ## Positioning
 
-The product opportunity is an evaluated, usable combination of local intent
-minimization, transport privacy, account/payment separation and bounded agent
-capabilities. Mixnets, prompt anonymization and data redaction are established
-prior art. Evaluate the entire job against explicit attackers; do not market the
-composition itself as a new cryptographic guarantee.
+The product opportunity is a usable request engine with explicit transport,
+credential and verification boundaries across ordinary web workloads. Research
+and AI applications can add local intent minimization and task-specific content
+controls above it. Such transformations must preserve their task's semantics;
+a universal rewrite is unsuitable for arbitrary HTTP bodies.
+
+Mixnets, private proxies, anonymous credentials, web-data proofs and redaction
+are established prior art. Reuse reviewed implementations where their trust
+model fits, evaluate complete requests against explicit attackers, and do not
+market the composition as a new cryptographic guarantee. The broader scope
+does not change legacy vault compatibility: existing notes require their
+original protocol, deployment and proving artifacts.

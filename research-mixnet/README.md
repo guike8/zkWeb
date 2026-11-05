@@ -1,15 +1,24 @@
-# Headless research mixnet experiment
+# zkWeb headless prototype
 
-This is the first transport prototype for our private research daemon, based on
+zkWeb is the working name for a general web request privacy toolkit. This module
+is its first transport and HTTP adapter prototype. API CRUD, web fetching,
+private application egress and AI/research tools share the request engine; the
+product scope extends beyond an AI API wrapper or research daemon.
+
+The transport work builds on
 [Vitalik's zkAPI/Tor/rewriting experiment](https://x.com/VitalikButerin/status/2111046730959433793)
 and his suggestion to trade bandwidth and latency for continuous cover traffic.
 The fork starts at `vbuterin/zkapi` commit
-`0fb263b0da04986cfe5c63b12340c1581018ae9b`.
+`0fb263b0da04986cfe5c63b12340c1581018ae9b`. The source directory, Go module path
+and upstream protocol identifiers retain their historical names.
 
 It is a working **loopback transport experiment**, not a production anonymity
 service. It runs headlessly. `demo` and `compare` use synthetic jobs and emit
 aggregate JSON. The separate opt-in `request` command carries a bounded HTTP
-CRUD request over the same local Sphinx/SURB transport to an HTTPS worker.
+request over the same local Sphinx/SURB transport to an HTTPS worker. The current
+HTTP path does not generate ZK proofs of access, execution or response contents.
+See the [current implementation research](../docs/web-request-research.md) for the
+roles of private transport, anonymous access and selective data verification.
 
 ## Run
 
@@ -23,24 +32,27 @@ cd research-mixnet
 make test
 make vet
 make build
-./bin/research-mixnet demo
+./bin/zkweb demo
 
 # Same fixed schedules, with no jobs at all:
-./bin/research-mixnet demo --jobs 0 --duration 6s
+./bin/zkweb demo --jobs 0 --duration 6s
 
 # Explore the latency/bandwidth tradeoff, without inference charges:
-./bin/research-mixnet demo --rate 4 --mean-delay 100ms --duration 12s
+./bin/zkweb demo --rate 4 --mean-delay 100ms --duration 12s
 
 # Separate OS processes; 16 clients and four fault scenarios (~4 minutes):
 make compare
 
 # Smaller process smoke run; aggregate files only:
-./bin/research-mixnet compare --clients 4 --disconnect-clients 1 \
+./bin/zkweb compare --clients 4 --disconnect-clients 1 \
   --jobs-per-client 2 --rate 4 --duration 12s --cases clean \
   --output-dir evidence/local-process-smoke
 
-./bin/research-mixnet reference-check
+./bin/zkweb reference-check
 ```
+
+`make build` produces `bin/zkweb` and the compatible `bin/research-mixnet`
+executable from the same source.
 
 Build dependencies download over the network. `demo` and `compare` bind only
 literal `127.0.0.1` addresses and contact only those listeners. They accept no
@@ -50,7 +62,7 @@ returns a nonzero status for incomplete jobs. The `compare` command records
 incomplete jobs as measurements, since loss and disconnection are deliberate.
 Dropped observation events invalidate that trial's attack scores.
 
-## Bounded HTTP CRUD requests
+## Bounded HTTP requests
 
 `request` supports `GET`, `POST`, `PUT`, `PATCH` and `DELETE` against one explicitly
 selected public HTTPS origin, plus `HEAD` and `OPTIONS`. It sends the request
@@ -72,26 +84,26 @@ followed, and private/local destinations are refused.
 ```sh
 # Create. Replace the origin and path with an API you control.
 printf '%s\n' '{"method":"POST","path":"/items","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"first\"}"}' |
-  ./bin/research-mixnet request --target https://api.example.com --input -
+  ./bin/zkweb request --target https://api.example.com --input -
 
 # Read.
 printf '%s\n' '{"method":"GET","path":"/items/1"}' |
-  ./bin/research-mixnet request --target https://api.example.com --input -
+  ./bin/zkweb request --target https://api.example.com --input -
 
 # Replace.
 printf '%s\n' '{"method":"PUT","path":"/items/1","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"replacement\"}"}' |
-  ./bin/research-mixnet request --target https://api.example.com --input -
+  ./bin/zkweb request --target https://api.example.com --input -
 
 # Update selected fields.
 printf '%s\n' '{"method":"PATCH","path":"/items/1","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"updated\"}"}' |
-  ./bin/research-mixnet request --target https://api.example.com --input -
+  ./bin/zkweb request --target https://api.example.com --input -
 
 # Delete.
 printf '%s\n' '{"method":"DELETE","path":"/items/1"}' |
-  ./bin/research-mixnet request --target https://api.example.com --input -
+  ./bin/zkweb request --target https://api.example.com --input -
 
 # Read an envelope from a protected file and select the schedule in advance.
-./bin/research-mixnet request --target https://api.example.com \
+./bin/zkweb request --target https://api.example.com \
   --input request.json --rate 8 --duration 12s --mean-delay 50ms
 ```
 
@@ -211,9 +223,12 @@ defeat a colluding provider and guard. The opt-in HTTP worker adds bounded CRUD
 egress, but no directory/PKI, remote link authentication, packet-expiry protocol,
 persistent replay store, SURB replenishment, delivery/retry protocol, real
 inference, local LLM rewriter or zkAPI integration.
-Payloads are bounded to one cell. Long answers and source documents need a
-reviewed fragmentation/reassembly protocol with independent response scheduling.
-X25519 here is not post-quantum protection.
+Payloads are bounded to one cell. Large and binary bodies need a reviewed
+fragmentation/reassembly protocol with independent response scheduling, resource
+limits and explicit completion semantics. Streaming, WebSockets, CONNECT,
+application sessions and optional proof adapters require separate designs and
+acceptance tests; none is available in this prototype. X25519 here is not
+post-quantum protection, and Sphinx encryption is not a ZK execution proof.
 
 See [architecture and production milestones](ARCHITECTURE.md),
 [candidate applications](APPLICATIONS.md), and [validation evidence](evidence/README.md).

@@ -36,7 +36,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	if len(args) == 0 || args[0] != "demo" {
-		return errors.New("usage: research-mixnet demo | compare | request | reference-check")
+		return errors.New("usage: zkweb request | demo | compare | reference-check")
 	}
 	cfg := lab.DefaultConfig()
 	f := flag.NewFlagSet("demo", flag.ContinueOnError)
@@ -123,7 +123,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := run(ctx, os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "research-mixnet:", err)
+		fmt.Fprintln(os.Stderr, "zkweb:", err)
 		os.Exit(1)
 	}
 }

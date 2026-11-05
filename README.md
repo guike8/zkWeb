@@ -1,13 +1,51 @@
-# zkAPI
+# zkWeb
 
-**Product fork:** our headless private research work starts in
-[`research-mixnet/`](research-mixnet/README.md). It includes a local Sphinx/SURB
-transport experiment with continuous scheduled cover in both directions, a
-separate-process timing/fault comparison, tests, an application research brief
-and production milestones. An opt-in `request` command also carries bounded
-HTTP CRUD requests through the local prototype to an HTTPS worker. This is a
-loopback prototype; it does not provide a production anonymity service or change
-the upstream wallet/deployment status described below.
+**Working name.** zkWeb is a general web request privacy toolkit in development,
+forked from zkAPI. Its scope is HTTP requests across the web: API CRUD, document
+fetches and application or agent egress. AI inference and private research are
+applications of the same request engine.
+
+The intended interface covers methods, URLs, headers, request bodies, response
+statuses and response bodies. The roadmap extends that interface to large and
+binary transfers, then evaluates streaming and session support. Transport privacy,
+anonymous access or payment proofs, and optional proofs about selected response
+data have different trust assumptions and are separate parts of the design.
+
+## What works today
+
+The [headless prototype](research-mixnet/README.md) carries `GET`, `HEAD`, `POST`,
+`PUT`, `PATCH`, `DELETE` and `OPTIONS` through scheduled local Sphinx/SURB links
+to a worker that makes an HTTPS request. It supports explicit headers, query
+strings and small UTF-8 bodies, with bounded responses and no automatic retries.
+Synthetic `demo` and `compare` commands exercise cover traffic and timing/fault
+measurements separately from real HTTP work.
+
+All mix nodes currently run on one machine, and the worker contacts the API
+directly. Each request and reply must fit one cell, including envelope overhead.
+This is a loopback transport prototype. It does not yet offer general browser
+compatibility, a production anonymity service, or ZK proofs for HTTP execution or
+responses. The inherited zkAPI proof and wallet stack is separate from this path.
+
+```sh
+cd research-mixnet
+make build
+./bin/zkweb request --help
+make test
+```
+
+The module directory remains `research-mixnet/`; `research-mixnet` is also kept as
+a compatibility executable. Repository and upstream protocol identifiers retain
+their existing names. Read the [implementation research](docs/web-request-research.md),
+[architecture and milestones](research-mixnet/ARCHITECTURE.md),
+[request examples](research-mixnet/README.md#bounded-http-requests) and
+[application hypotheses](research-mixnet/APPLICATIONS.md).
+
+## Upstream zkAPI compatibility
+
+The sections below document the inherited zkAPI wallet, billing and operator
+components. Their original names, protocol identifiers, deployment pins and
+provenance are retained for compatibility. These components do not make the
+current zkWeb HTTP adapter a ZK-proven request service.
 
 zkAPI lets you pay for AI and other APIs with ETH and make unlinkable requests.
 It keeps API usage separate from your on-chain deposit: the service can verify
@@ -31,7 +69,7 @@ Releases follow [semantic versioning](docs/versioning.md) on major version 0:
 until 1.0.0, any interface may change in any release. See the
 [changelog](CHANGELOG.md).
 
-## Privacy-enabled client development branch
+### Privacy-enabled client development branch
 
 This branch adds native Tor conversation isolation, canonical prompt rewriting,
 separate target-side history, bounded cover traffic and saved vault-protocol
@@ -43,7 +81,7 @@ production proving keys are missing; legacy needs its matching historical wallet
 bundle. Neither protocol selection nor privacy features bypass these checks.
 Local wallets, binaries, proving assets and scratch outputs are excluded from Git.
 
-## Local OpenAI-compatible API
+### Local OpenAI-compatible API
 
 Use [zkapi-clientd](zkapi-clientd/README.md) to configure an ETH wallet and serve
 inference to Open WebUI or another local OpenAI-compatible client. Its
@@ -51,7 +89,7 @@ withdrawals can pay their network fee from the payout (`withdraw --fees
 payout`, through an ERC-4337 paymaster), so the payout address needs no ETH;
 the vault is unchanged.
 
-## Build and test
+### Build and test
 
 ```sh
 npm ci
@@ -68,7 +106,7 @@ The protocol and required Solidity libraries are ordinary files in this reposito
 No submodule initialization, Cairo compiler or STARK prover is needed. See
 [source provenance](protocol/VENDORED.md).
 
-## Browser SDK
+### Browser SDK
 
 `@openanonymity/zkapi-browser-sdk` owns native ETH funding, wallet persistence,
 proof generation, lease recovery, settlement and withdrawals. Mainnet and Sepolia
@@ -89,7 +127,7 @@ packaged network profiles are placeholders and `npm run build:browser` and
 WASM deliberately, use `scripts/build-browser-client.sh` and review the changed
 artifact hashes; `npm run verify:wasm` rebuilds it reproducibly and compares.
 
-## Full local lifecycle acceptance
+### Full local lifecycle acceptance
 
 Run `npm run test:e2e:v2` to build and test circuit `zkapi-v2-concession-v1`
 end to end on a fresh local chain. It covers the honest flow and the Sepolia
@@ -105,7 +143,7 @@ mocked. See the [acceptance process and coverage limits](docs/v2-acceptance.md).
 `node scripts/check-withdrawal-golden.mjs` submits the Rust, JS and Go
 withdrawal encoders' calldata to an Anvil vault.
 
-## Operator services
+### Operator services
 
 - `zkapi serverd`: native ETH lease authorization, settlement and Schnorr signing.
 - `zkapi-indexerd` / `zkapi indexer`: vault event indexing and Merkle paths
@@ -141,7 +179,7 @@ tests, the drill vault and vaults deliberately deployed on a single-party setup
 command generates new development keys;
 it is not part of connecting a client to the configured vault.
 
-## Protocol details
+### Protocol details
 
 The active protocol uses Groth16 over BN254, Poseidon, note-bound Baby-JubJub
 commitments and Schnorr signatures, a nullifier chain whose successor anchors
@@ -152,10 +190,12 @@ the multi-party setup described in
 [the ceremony setup](protocol/setup/v2-concession/README.md); the committed
 keys are a single-party development setup.
 
-## Source layout
+### Source layout
 
 | Directory | Purpose |
 | --- | --- |
+| `research-mixnet/` | Headless zkWeb prototype, HTTP worker and transport experiments |
+| `docs/web-request-research.md` | Current implementation research and general web request direction |
 | `zkapi-clientd/` | Local ETH-funded OpenAI-compatible client and installer |
 | `sdk/` | Browser native ETH wallet, public artifacts and SDK tests |
 | `protocol/rust/` | Shared v2 types, BN254 helpers, circuits and Rust/WASM wallets |
