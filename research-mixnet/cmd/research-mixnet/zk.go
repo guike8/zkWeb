@@ -24,7 +24,7 @@ import (
 const (
 	zkProtocol    = "zkweb-zk-authorized-crud-v1"
 	zkBodyLimit   = 64 << 10
-	zkOutputLimit = 1 << 20
+	zkOutputLimit = 3 << 20
 )
 
 var errZKBackendUnavailable = errors.New("ZK listener backend unavailable")
@@ -41,6 +41,8 @@ func zkWithBackend(ctx context.Context, mode string, args []string, out io.Write
 	f := flag.NewFlagSet("zk-"+mode, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var output, serverDir, stateFile, clientDir, endpoint, listen, method, key, data, dataFile string
+	var upstream, allowedMethods, pathPrefix, upstreamCA, upstreamHeaders string
+	var allowPrivate bool
 	var members int
 	var timeout time.Duration
 	switch mode {
@@ -50,8 +52,14 @@ func zkWithBackend(ctx context.Context, mode string, args []string, out io.Write
 		f.DurationVar(&timeout, "timeout", 10*time.Minute, "setup deadline (30s–30m)")
 	case "listen":
 		f.StringVar(&serverDir, "server-dir", "", "required server profile with verifying key only")
-		f.StringVar(&stateFile, "state-file", "", "required persistent record-state file")
+		f.StringVar(&stateFile, "state-file", "", "record-state file; choose state-file or upstream mode")
 		f.StringVar(&listen, "listen", "127.0.0.1:0", "numeric loopback IP:port; 0 selects an available port")
+		f.StringVar(&upstream, "upstream", "", "configured HTTPS origin for experimental API gateway mode")
+		f.StringVar(&allowedMethods, "allow-methods", "GET,HEAD", "comma-separated gateway method allowlist; writes require explicit opt-in")
+		f.StringVar(&pathPrefix, "upstream-path-prefix", "/", "allowed upstream path prefix")
+		f.BoolVar(&allowPrivate, "allow-private-upstream", false, "allow a trusted private/self-hosted upstream; public IPs are required by default")
+		f.StringVar(&upstreamCA, "upstream-ca-file", "", "optional trusted PEM CA file for the upstream TLS certificate")
+		f.StringVar(&upstreamHeaders, "upstream-headers-file", "", "optional private operator credential-header JSON file")
 	case "request":
 		f.StringVar(&clientDir, "client-dir", "", "required client profile with private membership credential")
 		f.StringVar(&endpoint, "url", "", "required numeric-loopback HTTP origin from zk-listen")
@@ -94,15 +102,49 @@ func zkWithBackend(ctx context.Context, mode string, args []string, out io.Write
 		if err != nil {
 			return errors.New("zk-listen requires --server-dir")
 		}
-		stateFile, err = privateAbsoluteDir(stateFile)
-		if err != nil {
-			return errors.New("zk-listen requires --state-file")
-		}
 		listen, err = privateListenAddress(listen)
 		if err != nil {
 			return errors.New("zk-listen requires a numeric loopback IP:port")
 		}
-		backendArgs = append(backendArgs, "--server-dir", serverDir, "--state-file", stateFile, "--listen", listen)
+		backendArgs = append(backendArgs, "--server-dir", serverDir)
+		if (stateFile == "") == (upstream == "") {
+			return errors.New("zk-listen requires exactly one of --state-file or --upstream")
+		}
+		if upstream == "" {
+			if provided["allow-methods"] || provided["upstream-path-prefix"] || provided["allow-private-upstream"] || provided["upstream-ca-file"] || provided["upstream-headers-file"] {
+				return errors.New("upstream options require --upstream")
+			}
+			stateFile, err = privateAbsoluteDir(stateFile)
+			if err != nil {
+				return errors.New("invalid record-state path")
+			}
+			backendArgs = append(backendArgs, "--state-file", stateFile, "--listen", listen)
+		} else {
+			upstream, err = zkCanonicalUpstream(upstream)
+			if err != nil || zkAPIPath(pathPrefix) != nil || strings.Contains(pathPrefix, "?") {
+				return errors.New("invalid HTTPS upstream or path prefix")
+			}
+			methods := strings.Split(allowedMethods, ",")
+			seen := map[string]bool{}
+			for index, allowed := range methods {
+				allowed = strings.ToUpper(strings.TrimSpace(allowed))
+				if !zkAPIMethod(allowed) || seen[allowed] {
+					return errors.New("invalid upstream method allowlist")
+				}
+				seen[allowed] = true
+				methods[index] = allowed
+			}
+			backendArgs = append(backendArgs, "--listen", listen, "--upstream", upstream, "--allow-methods", strings.Join(methods, ","), "--upstream-path-prefix", pathPrefix, "--allow-private-upstream", strconv.FormatBool(allowPrivate))
+			for _, option := range []struct{ name, value string }{{"--upstream-ca-file", upstreamCA}, {"--upstream-headers-file", upstreamHeaders}} {
+				if option.value != "" {
+					absolute, err := privateAbsoluteDir(option.value)
+					if err != nil {
+						return errors.New("invalid upstream configuration file")
+					}
+					backendArgs = append(backendArgs, option.name, absolute)
+				}
+			}
+		}
 	case "request":
 		var err error
 		clientDir, err = privateAbsoluteDir(clientDir)
@@ -355,7 +397,7 @@ func runZKBackend(ctx context.Context, backend string, args []string, out io.Wri
 	command := exec.CommandContext(runCtx, backend, args...)
 	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C", "RAYON_NUM_THREADS=4"}
 	command.Stderr = io.Discard
-	command.Stdout = &privateProcessOutput{out: out, cancel: cancel}
+	command.Stdout = &zkProcessOutput{out: out, cancel: cancel}
 	command.WaitDelay = time.Second
 	if err := command.Run(); err != nil {
 		if ctx.Err() != nil {
@@ -364,4 +406,27 @@ func runZKBackend(ctx context.Context, backend string, args []string, out io.Wri
 		return errors.New("ZK backend failed")
 	}
 	return nil
+}
+
+type zkProcessOutput struct {
+	out    io.Writer
+	cancel context.CancelFunc
+	total  int
+}
+
+func (writer *zkProcessOutput) Write(data []byte) (int, error) {
+	if len(data) > zkOutputLimit-writer.total {
+		writer.cancel()
+		return 0, errors.New("ZK backend output exceeds limit")
+	}
+	writer.total += len(data)
+	n, err := writer.out.Write(data)
+	if err != nil || n != len(data) {
+		writer.cancel()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return n, err
+	}
+	return n, nil
 }

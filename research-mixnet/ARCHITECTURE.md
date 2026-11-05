@@ -2,7 +2,8 @@
 
 The current priority is a complete ZK authorization loop: a client proves
 membership, the listener verifies the proof against the exact HTTP request and
-an issued one-use challenge, then it executes CRUD. Request bodies and the
+an issued one-use challenge, then it executes CRUD or forwards to a configured
+HTTPS API. Request bodies and the
 listener's database remain plaintext at this stage. FHE for hidden-input
 computation is deferred separately.
 
@@ -17,6 +18,7 @@ own boundaries. See the [listener guide](../docs/zk-listener.md).
 | --- | --- | --- |
 | ZK authorization | Prove possession of an authorized secret without sending the member identity or Merkle path. | A depth-four membership circuit and randomized, request-bound authorization tag; listener verifies before CRUD. |
 | Application CRUD | Create, read, replace and delete bounded binary records. | POST/GET/PUT/DELETE at the listener; request contents and durable records are plaintext. All authorized members share access to the records. |
+| External API gateway | Authorize an exact upstream request before HTTPS egress. | `zk-api` binds origin, target method, escaped path/query, explicit headers and body; fixed-origin async forwarding with validated/pinned DNS, verified TLS, scoped methods/paths and bounded binary envelopes. |
 | Profiles and replay | Pin the verification statement and reject reused or wrong-context authorization. | Trusted offline setup, hash-pinned roles, verifying material only at the listener, and bounded expiring one-use challenges bound to a fresh server instance. |
 | Private computation | Compute over request inputs while hiding them from the destination. | Deferred. The retained optional FHE mode is a four-value lookup; separate encrypted-CRUD work is not bundled into this listener milestone. |
 | General HTTP interface | Preserve ordinary HTTP method, origin/path, headers, body, status and bytes. | Separate fetch/request modes; destinations receive ordinary plaintext inputs. |
@@ -31,7 +33,7 @@ own boundaries. See the [listener guide](../docs/zk-listener.md).
 
 The isolated `zk-listener/` Rust workspace builds `zkweb-zk-listener` through
 `make build-zk`; `make test-zk` is its acceptance entry point. The Go wrappers
-`zk-setup`, `zk-listen` and `zk-request` invoke that fixed sibling executable.
+`zk-setup`, `zk-listen`, `zk-request` and `zk-api` invoke that fixed sibling executable.
 The ordinary Go build includes help/wrappers without compiling Rust. The
 backend has no TFHE or wallet-workspace dependency.
 

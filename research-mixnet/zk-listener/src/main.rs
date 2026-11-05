@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use base64::{Engine, engine::general_purpose::STANDARD};
-use std::{collections::BTreeMap, io::Write, path::Path};
-use zkweb_zk_listener::{MAX_BODY, PROTOCOL, Result, client, fail, profile, server};
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    io::{Read, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+};
+use zkweb_zk_listener::{
+    MAX_BODY, PROTOCOL, Result, client, fail, forward, profile, protocol, server,
+};
 
 fn option(options: &mut BTreeMap<String, String>, key: &str) -> Result<String> {
     options
@@ -49,16 +57,51 @@ fn run() -> Result<()> {
         }
         "listen" => {
             let directory = option(&mut options, "--server-dir")?;
-            let state_file = option(&mut options, "--state-file")?;
             let address = option(&mut options, "--listen")?;
-            if !options.is_empty() {
-                return Err(fail("unknown option"));
+            let state_file = options.remove("--state-file");
+            let upstream = options.remove("--upstream");
+            if state_file.is_some() == upstream.is_some() {
+                return Err(fail("choose record state or configured HTTPS upstream"));
             }
+            let loaded = profile::load_server(Path::new(&directory))?;
+            let mut state = if let Some(origin) = upstream {
+                let allowed_methods = options
+                    .remove("--allow-methods")
+                    .unwrap_or_else(|| "GET,HEAD".into())
+                    .split(',')
+                    .map(str::to_owned)
+                    .collect();
+                let path_prefix = options
+                    .remove("--upstream-path-prefix")
+                    .unwrap_or_else(|| "/".into());
+                let allow_private = options
+                    .remove("--allow-private-upstream")
+                    .unwrap_or_else(|| "false".into())
+                    .parse()
+                    .map_err(|_| fail("invalid private upstream policy"))?;
+                let ca_file = options.remove("--upstream-ca-file").map(PathBuf::from);
+                let headers_file = options.remove("--upstream-headers-file").map(PathBuf::from);
+                if !options.is_empty() {
+                    return Err(fail("unknown option"));
+                }
+                server::State::open_gateway(
+                    loaded,
+                    forward::Config {
+                        origin,
+                        allowed_methods,
+                        path_prefix,
+                        allow_private,
+                        ca_file,
+                        headers_file,
+                    },
+                )?
+            } else {
+                if !options.is_empty() {
+                    return Err(fail("upstream options require gateway mode"));
+                }
+                server::State::open(loaded, Path::new(state_file.as_ref().unwrap()))?
+            };
             let listener = server::bind(&address)?;
-            let mut state = server::State::open(
-                profile::load_server(Path::new(&directory))?,
-                Path::new(&state_file),
-            )?;
             print_json(
                 &serde_json::json!({"event":"ready", "url":server::url(&listener)?, "profile_id":state.profile_id(), "protocol":PROTOCOL}),
                 false,
@@ -84,6 +127,53 @@ fn run() -> Result<()> {
                 &endpoint,
                 &method,
                 &key,
+                &body,
+            )?;
+            print_json(&result, true)?;
+        }
+        "api-request" => {
+            let directory = option(&mut options, "--client-dir")?;
+            let endpoint = option(&mut options, "--url")?;
+            let upstream = option(&mut options, "--upstream")?;
+            let method = option(&mut options, "--method")?;
+            let path = option(&mut options, "--path")?;
+            let encoded = option(&mut options, "--headers-base64")?;
+            let body_file = option(&mut options, "--body-file")?;
+            if !options.is_empty()
+                || encoded.len() > zkweb_zk_listener::MAX_API_HEADER_BYTES.div_ceil(3) * 4
+            {
+                return Err(fail("invalid API request options"));
+            }
+            let bytes = STANDARD.decode(encoded)?;
+            if bytes.len() > zkweb_zk_listener::MAX_API_HEADER_BYTES {
+                return Err(fail("API headers exceed limit"));
+            }
+            let headers: Vec<protocol::ApiHeader> = serde_json::from_slice(&bytes)?;
+            if !Path::new(&body_file).is_absolute() {
+                return Err(fail("absolute private body file required"));
+            }
+            let mut file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&body_file)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.len() > zkweb_zk_listener::MAX_API_BODY as u64 {
+                return Err(fail("invalid API body file"));
+            }
+            let mut body = Vec::new();
+            (&mut file)
+                .take(zkweb_zk_listener::MAX_API_BODY as u64 + 1)
+                .read_to_end(&mut body)?;
+            if body.len() > zkweb_zk_listener::MAX_API_BODY {
+                return Err(fail("API body exceeds limit"));
+            }
+            let result = client::api_request(
+                &profile::load_client(Path::new(&directory))?,
+                &endpoint,
+                &upstream,
+                &method,
+                &path,
+                &headers,
                 &body,
             )?;
             print_json(&result, true)?;

@@ -2,13 +2,16 @@
 
 The current priority is a ZK authorization listener: a client generates a real
 Groth16 membership proof, the listener verifies it against the exact HTTP
-request and a one-use challenge, then executes CRUD on a persistent record store.
+request and a one-use challenge, then executes local CRUD or forwards a permitted
+request to a configured HTTPS API.
 The listener receives no credential secret, member index or Merkle path.
 
 Request contents and the listener's stored records are plaintext. This closes
 the authorization loop first; FHE for hidden-input computation is deferred.
 The repository is [guike8/zkWeb](https://github.com/guike8/zkWeb). See the
 [listener guide](../docs/zk-listener.md) for the exact statement and trust model.
+The [API gateway guide](../docs/zk-api.md) covers `zk-api`, upstream policy,
+signed headers, binary payloads and gateway-held credentials.
 
 The transport work builds on
 [Vitalik's zkAPI/Tor/rewriting experiment](https://x.com/VitalikButerin/status/2111046730959433793)
@@ -22,6 +25,7 @@ The headless tools have separate roles:
 | Commands | Implemented role | Destination visibility |
 | --- | --- | --- |
 | `zk-setup`, `zk-listen`, `zk-request` | Groth16 anonymous group authorization before plaintext binary-record CRUD | Method, path, body, public group/profile and request metadata; no credential witness |
+| `zk-listen --upstream`, `zk-api` | Proof verification before fixed-origin HTTPS forwarding; method/path scope, TLS/DNS validation and 1 MiB bodies | Gateway and API see contents; upstream receives selected headers and configured API credentials, never proof headers |
 | `private-setup`, `private-serve`, `private-query` | Offline provisioned, ZK-verified encrypted selector and FHE lookup over loopback HTTP | Ciphertext, proof and public protocol context; no plaintext selector or client secret key |
 | `fetch` | Bounded binary HTTPS over an already-running Tor/SOCKS5 proxy, with TLS between local client and origin | Ordinary HTTP request contents and account identity |
 | `request` | Small UTF-8 HTTP exchange over the loopback Sphinx/SURB experiment to an HTTPS worker | Worker and destination see ordinary HTTP request contents |

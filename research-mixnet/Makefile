@@ -35,7 +35,7 @@ build-zk:
 	cp "$(ZK_TARGET_DIR)/release/zkweb-zk-listener" bin/zkweb-zk-listener
 test-zk: build build-zk
 	RUSTC="$$(rustup which --toolchain 1.99.0 rustc)" RUSTDOC="$$(rustup which --toolchain 1.99.0 rustdoc)" CARGO_TARGET_DIR="$(abspath $(ZK_TARGET_DIR))" rustup run 1.99.0 cargo test --locked --release --manifest-path zk-listener/Cargo.toml -- --test-threads=1
-	ZKWEB_ZK_CLI="$(abspath bin/zkweb)" go test -race -count=1 ./internal/zke2e -run TestZKListenerIntegration -timeout 5m
+	ZKWEB_ZK_CLI="$(abspath bin/zkweb)" go test -race -count=1 -p 1 ./internal/zke2e ./internal/zkapi_e2e -run 'TestZK.*Integration' -timeout 5m
 demo:
 	go run ./cmd/research-mixnet demo
 compare: build

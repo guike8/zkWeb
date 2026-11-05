@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::{
-    CHALLENGE_LIFETIME, MAX_BODY, MAX_CHALLENGES, PROOF_BYTES, PROTOCOL, Result, crypto, fail,
+    CHALLENGE_LIFETIME, MAX_API_BODY, MAX_API_ENVELOPE, MAX_API_HEADER_BYTES, MAX_API_PATH,
+    MAX_BODY, MAX_CHALLENGES, PROOF_BYTES, PROTOCOL, Result, crypto, fail,
+    forward::{Config as ForwardConfig, Forwarder},
     profile::ServerProfile,
-    protocol::{self, Challenge},
+    protocol::{self, ApiHeader, ApiResponse, Challenge},
     storage::Database,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -23,6 +25,7 @@ use std::{
     net::{SocketAddr, TcpListener},
     path::Path,
     rc::Rc,
+    sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -42,11 +45,41 @@ pub struct Reply {
     pub body: Vec<u8>,
 }
 
+enum Backend {
+    Records(Database),
+    Upstream(Arc<Forwarder>),
+}
+
+#[derive(Debug)]
+struct ApiPolicyDenied;
+impl std::fmt::Display for ApiPolicyDenied {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("request rejected by upstream policy")
+    }
+}
+impl std::error::Error for ApiPolicyDenied {}
+
+/// Own the verified request so async dispatch cannot substitute its signed bytes.
+pub struct AuthorizedApi {
+    forwarder: Arc<Forwarder>,
+    method: String,
+    path: String,
+    headers: Vec<ApiHeader>,
+    body: Vec<u8>,
+}
+impl AuthorizedApi {
+    pub async fn send(self) -> Result<ApiResponse> {
+        self.forwarder
+            .send(&self.method, &self.path, &self.headers, &self.body)
+            .await
+    }
+}
+
 pub struct State {
     profile: ServerProfile,
     instance: String,
     challenges: HashMap<String, Challenge>,
-    database: Database,
+    backend: Backend,
     verification_attempts: u64,
     executions: u64,
     mutations: u64,
@@ -60,12 +93,34 @@ impl State {
             profile,
             instance: protocol::random_id(),
             challenges: HashMap::new(),
-            database,
+            backend: Backend::Records(database),
             verification_attempts: 0,
             executions: 0,
             mutations: 0,
             poisoned: false,
         })
+    }
+    pub fn open_gateway(profile: ServerProfile, config: ForwardConfig) -> Result<Self> {
+        let forwarder = Forwarder::new(config)?;
+        Ok(Self {
+            profile,
+            instance: protocol::random_id(),
+            challenges: HashMap::new(),
+            backend: Backend::Upstream(Arc::new(forwarder)),
+            verification_attempts: 0,
+            executions: 0,
+            mutations: 0,
+            poisoned: false,
+        })
+    }
+    pub fn is_gateway(&self) -> bool {
+        matches!(&self.backend, Backend::Upstream(_))
+    }
+    pub fn upstream_origin(&self) -> Option<&str> {
+        match &self.backend {
+            Backend::Upstream(upstream) => Some(upstream.origin()),
+            _ => None,
+        }
     }
     pub fn profile_id(&self) -> &str {
         &self.profile.manifest.profile_id
@@ -80,7 +135,10 @@ impl State {
         self.mutations
     }
     pub fn revision(&self) -> u64 {
-        self.database.revision()
+        match &self.backend {
+            Backend::Records(database) => database.revision(),
+            _ => 0,
+        }
     }
     pub fn is_poisoned(&self) -> bool {
         self.poisoned
@@ -90,9 +148,11 @@ impl State {
         if self.poisoned {
             return Err(fail("listener database requires recovery"));
         }
-        if let Err(error) = self.database.check_current() {
-            self.poisoned = true;
-            return Err(error);
+        if let Backend::Records(database) = &self.backend {
+            if let Err(error) = database.check_current() {
+                self.poisoned = true;
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -111,6 +171,7 @@ impl State {
             server_instance: self.instance.clone(),
             challenge_id: protocol::random_id(),
             expires_unix: time + CHALLENGE_LIFETIME,
+            upstream_origin: self.upstream_origin().map(str::to_owned),
         };
         self.challenges
             .insert(challenge.challenge_id.clone(), challenge.clone());
@@ -129,6 +190,9 @@ impl State {
         tag: &str,
     ) -> Result<Reply> {
         self.check_available()?;
+        if self.is_gateway() {
+            return Err(fail("record execution is unavailable in gateway mode"));
+        }
         let key = path
             .strip_prefix("/records/")
             .filter(|key| protocol::valid_key(key))
@@ -140,39 +204,16 @@ impl State {
         {
             return Err(fail("invalid authorization request"));
         }
-        let challenge = self
-            .challenges
-            .remove(challenge_id)
-            .ok_or_else(|| fail("unknown or consumed challenge"))?;
-        challenge.validate(self.profile_id())?;
-        if challenge.server_instance != self.instance
-            || proof_base64.len() != PROOF_BYTES.div_ceil(3) * 4
-            || !protocol::valid_id(tag)
-        {
-            return Err(fail("invalid authorization"));
-        }
-        let proof = STANDARD.decode(proof_base64)?;
-        if proof.len() != PROOF_BYTES {
-            return Err(fail("invalid authorization proof"));
-        }
+        let challenge = self.take_challenge(challenge_id)?;
         let digest = protocol::request_digest(&challenge, method, path, body);
-        self.verification_attempts += 1;
-        if !crypto::verify(
-            &self.profile.verifying_key,
-            &self.profile.manifest.group_root,
-            &digest,
-            &proof,
-            tag,
-        )? {
-            return Err(fail("invalid authorization proof"));
-        }
-        challenge.validate(self.profile_id())?;
+        self.verify_authorization(&challenge, &digest, proof_base64, tag)?;
         self.executions += 1;
-        let result = match self.database.execute(method, key, body) {
+        let Backend::Records(database) = &mut self.backend else {
+            return Err(fail("record mode required"));
+        };
+        let result = match database.execute(method, key, body) {
             Ok(result) => result,
             Err(error) => {
-                // A rename/fsync error may already have changed the durable file.
-                // Refuse further service; the client must treat 503 as uncertain.
                 self.poisoned = true;
                 return Err(error);
             }
@@ -183,6 +224,107 @@ impl State {
         Ok(Reply {
             status: result.status,
             body: result.body,
+        })
+    }
+
+    fn take_challenge(&mut self, challenge_id: &str) -> Result<Challenge> {
+        if !protocol::valid_id(challenge_id) {
+            return Err(fail("invalid challenge"));
+        }
+        let challenge = self
+            .challenges
+            .remove(challenge_id)
+            .ok_or_else(|| fail("unknown or consumed challenge"))?;
+        challenge.validate(self.profile_id())?;
+        if challenge.server_instance != self.instance
+            || challenge.upstream_origin.as_deref() != self.upstream_origin()
+        {
+            return Err(fail("invalid challenge audience"));
+        }
+        Ok(challenge)
+    }
+
+    fn verify_authorization(
+        &mut self,
+        challenge: &Challenge,
+        digest: &[u8; 32],
+        proof_base64: &str,
+        tag: &str,
+    ) -> Result<()> {
+        if proof_base64.len() != PROOF_BYTES.div_ceil(3) * 4 || !protocol::valid_id(tag) {
+            return Err(fail("invalid authorization"));
+        }
+        let proof = STANDARD.decode(proof_base64)?;
+        if proof.len() != PROOF_BYTES {
+            return Err(fail("invalid authorization proof"));
+        }
+        self.verification_attempts += 1;
+        if !crypto::verify(
+            &self.profile.verifying_key,
+            &self.profile.manifest.group_root,
+            digest,
+            &proof,
+            tag,
+        )? {
+            return Err(fail("invalid authorization proof"));
+        }
+        challenge.validate(self.profile_id())?;
+        Ok(())
+    }
+
+    /// Burn the nonce and bind metadata before constructing an async upstream request.
+    pub fn prepare_api(
+        &mut self,
+        challenge_id: &str,
+        method: &str,
+        path_base64: &str,
+        headers_base64: &str,
+        body: &[u8],
+        proof_base64: &str,
+        tag: &str,
+    ) -> Result<AuthorizedApi> {
+        self.check_available()?;
+        if !self.is_gateway() {
+            return Err(fail("upstream gateway mode required"));
+        }
+        let challenge = self.take_challenge(challenge_id)?;
+        if !protocol::valid_api_method(method)
+            || body.len() > MAX_API_BODY
+            || (matches!(method, "GET" | "HEAD") && !body.is_empty())
+            || path_base64.len() > MAX_API_PATH.div_ceil(3) * 4
+            || headers_base64.len() > MAX_API_HEADER_BYTES.div_ceil(3) * 4
+        {
+            return Err(fail("invalid API metadata"));
+        }
+        let path = String::from_utf8(STANDARD.decode(path_base64)?)?;
+        protocol::validate_api_path(&path)?;
+        let headers_bytes = STANDARD.decode(headers_base64)?;
+        if headers_bytes.len() > MAX_API_HEADER_BYTES {
+            return Err(fail("API headers exceed limit"));
+        }
+        let headers: Vec<ApiHeader> = serde_json::from_slice(&headers_bytes)?;
+        let headers = protocol::canonical_api_headers(&headers)?;
+        let origin = self
+            .upstream_origin()
+            .ok_or_else(|| fail("missing upstream"))?
+            .to_owned();
+        let digest =
+            protocol::api_request_digest(&challenge, &origin, method, &path, &headers, body);
+        self.verify_authorization(&challenge, &digest, proof_base64, tag)?;
+        let Backend::Upstream(forwarder) = &self.backend else {
+            return Err(fail("upstream gateway mode required"));
+        };
+        forwarder
+            .validate_request(method, &path, &headers, body)
+            .map_err(|_| Box::new(ApiPolicyDenied) as crate::Error)?;
+        let forwarder = forwarder.clone();
+        self.executions += 1;
+        Ok(AuthorizedApi {
+            forwarder,
+            method: method.to_owned(),
+            path,
+            headers,
+            body: body.to_vec(),
         })
     }
 }
@@ -271,7 +413,9 @@ async fn handle(
     if lengths.next().is_some() {
         return Ok(invalid_request());
     }
-    if content_length.is_some_and(|length| length > MAX_BODY) {
+    let gateway = state.borrow().is_gateway();
+    let body_limit = if gateway { MAX_API_BODY } else { MAX_BODY };
+    if content_length.is_some_and(|length| length > body_limit) {
         return Ok(json(413, br#"{"error":"body too large"}"#));
     }
     let path = request.uri().path().to_owned();
@@ -290,6 +434,85 @@ async fn handle(
                 Err(_) => json(429, br#"{"error":"challenge unavailable"}"#),
             },
         );
+    }
+    if gateway {
+        if path != "/api" {
+            return Ok(json(404, br#"{"error":"unknown route"}"#));
+        }
+        // The API method is signed metadata. POST transport permits a HEAD
+        // upstream response to carry its status/headers in a JSON envelope.
+        if request.method() != Method::POST {
+            return Ok(json(405, br#"{"error":"method not allowed"}"#));
+        }
+        if header_once(request.headers(), "content-type") != Some("application/octet-stream")
+            || content_length.is_none()
+        {
+            return Ok(invalid_request());
+        }
+        let challenge = match header_once(request.headers(), protocol::CHALLENGE_HEADER) {
+            Some(value) => value.to_owned(),
+            None => return Ok(unauthorized()),
+        };
+        let target_method = header_once(request.headers(), protocol::API_METHOD_HEADER)
+            .unwrap_or_default()
+            .to_owned();
+        let target_path = header_once(request.headers(), protocol::API_PATH_HEADER)
+            .unwrap_or_default()
+            .to_owned();
+        let target_headers = header_once(request.headers(), protocol::API_HEADERS_HEADER)
+            .unwrap_or_default()
+            .to_owned();
+        let proof = header_once(request.headers(), protocol::PROOF_HEADER)
+            .unwrap_or_default()
+            .to_owned();
+        let tag = header_once(request.headers(), protocol::TAG_HEADER)
+            .unwrap_or_default()
+            .to_owned();
+        let bytes = match tokio::time::timeout(
+            BODY_TIMEOUT,
+            Limited::new(request.into_body(), MAX_API_BODY).collect(),
+        )
+        .await
+        {
+            Ok(Ok(body)) => body.to_bytes(),
+            _ => return Ok(invalid_request()),
+        };
+        if bytes.len() != content_length.unwrap_or(0) {
+            return Ok(invalid_request());
+        }
+        let authorized = {
+            state.borrow_mut().prepare_api(
+                &challenge,
+                &target_method,
+                &target_path,
+                &target_headers,
+                &bytes,
+                &proof,
+                &tag,
+            )
+        };
+        // No RefCell borrow crosses this await. The HTTP client is asynchronous.
+        return Ok(match authorized {
+            Ok(request) => match request.send().await {
+                Ok(result) => match serde_json::to_vec(&result) {
+                    Ok(body) if body.len() <= MAX_API_ENVELOPE => {
+                        response(200, "application/json", body)
+                    }
+                    _ => json(
+                        502,
+                        br#"{"format":"zkweb-zk-api-error-v1","delivery":"unknown"}"#,
+                    ),
+                },
+                Err(_) => json(
+                    502,
+                    br#"{"format":"zkweb-zk-api-error-v1","delivery":"unknown"}"#,
+                ),
+            },
+            Err(error) if error.is::<ApiPolicyDenied>() => {
+                json(403, br#"{"error":"upstream policy denied"}"#)
+            }
+            Err(_) => unauthorized(),
+        });
     }
     if !path
         .strip_prefix("/records/")
@@ -355,6 +578,16 @@ async fn handle(
 /// Serial bounded HTTP/1 handling. The stop flag is polled during network I/O;
 /// synchronous proof verification cannot be interrupted by the I/O timer.
 pub fn run(server: &Server, state: &mut State, stop: Option<&AtomicBool>) -> Result<()> {
+    let header_buffer = if state.is_gateway() {
+        64 * 1024
+    } else {
+        16 * 1024
+    };
+    let connection_timeout = if state.is_gateway() {
+        Duration::from_secs(60)
+    } else {
+        CONNECTION_TIMEOUT
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
@@ -376,11 +609,11 @@ pub fn run(server: &Server, state: &mut State, stop: Option<&AtomicBool>) -> Res
             builder
                 .keep_alive(false)
                 .max_headers(32)
-                .max_buf_size(16 * 1024)
+                .max_buf_size(header_buffer)
                 .header_read_timeout(HEADER_TIMEOUT)
                 .timer(TokioTimer::new());
             let connection = builder.serve_connection(TokioIo::new(stream), service);
-            let mut connection = Box::pin(tokio::time::timeout(CONNECTION_TIMEOUT, connection));
+            let mut connection = Box::pin(tokio::time::timeout(connection_timeout, connection));
             loop {
                 if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                     return Ok(());

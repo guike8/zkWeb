@@ -144,6 +144,10 @@ logins, authorization revocation, per-user data isolation or a proof that the
 server honestly performed CRUD. Ordinary existing websites need an application
 adapter to accept this proof protocol.
 
+The experimental [API gateway](zk-api.md) supplies that adapter for configured
+HTTPS origins: it verifies authorization and forwards permitted ordinary HTTP
+requests. Existing APIs do not need to parse the Groth16 proof themselves.
+
 ## Verification
 
 ```sh
