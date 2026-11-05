@@ -8,10 +8,12 @@ direction, rather than a claim of universal compatibility today.
 
 The current implementation has a local HTTPS client over an explicit Tor/SOCKS5
 route, alongside the local Sphinx/SURB experiment with a bounded HTTPS worker.
-The local client supports bounded binary bodies. Covered fragmentation,
-streaming, persistent browser sessions and optional proofs remain design work.
-The [implementation research](../docs/web-request-research.md)
-compares existing systems and their trust boundaries.
+The local client supports bounded binary bodies. An optional offline verifier
+checks existing TLSNotary presentations; it is separate from both HTTP modes.
+Covered fragmentation, streaming, persistent browser sessions, proof capture
+and application-specific proof binding remain design work. The
+[implementation research](../docs/web-request-research.md) compares existing
+systems and their trust boundaries.
 
 ## Separate responsibilities
 
@@ -21,7 +23,7 @@ compares existing systems and their trust boundaries.
 | Transport | Hide client/request linkage under an explicit adversary model, with mode-specific latency and bandwidth tradeoffs. | `fetch` uses an explicit loopback Tor/SOCKS5 route with client-to-origin TLS and no direct fallback; `request` uses scheduled loopback Sphinx links with cover. Neither is an independently evaluated anonymity service operated by this project. |
 | Session and credential controls | Scope credentials, cookies, destinations and retained state to a caller-selected context. | Origin-scoped reusable client with per-client Tor isolation state, explicit headers and no ambient cookie jar or environment proxy; persistent session/daemon APIs remain future work. |
 | Anonymous access or payment | Prove eligibility or spending authority without exposing unnecessary identity. | Inherited zkAPI wallet/proof components exist separately; the HTTP worker has no access-proof or billing integration. |
-| Optional response verification | Establish selected facts about authenticated response data with a defined verifier and trust model. | Not implemented; evaluate existing zkTLS/notary protocols before choosing an adapter. |
+| Optional response verification | Authenticate selected web transcript data with a defined verifier and trust model, then support explicit application claims. | Partially implemented: optional `zkweb verify` checks existing TLSNotary alpha.15 presentations offline against caller-pinned notary/server/time policy and returns selected authenticated byte ranges. Capture, HTTP claims and request/challenge binding remain future work. |
 | Applications | Offer browser/tool interfaces, private research and other workflows above the request engine. | CLI `fetch` and `request` modes plus synthetic transport experiments; browser integration and research planning remain future work. |
 
 A zero-knowledge eligibility proof does not hide authenticated account identity
@@ -53,7 +55,8 @@ traffic as zero knowledge.
    API client may need exact bytes and session continuity instead.
 
 This flow is a design target. The local HTTPS client and bounded loopback request
-exchange below implement its initial request paths. The previous headless
+exchange below implement its initial request paths. Offline artifact verification
+implements a separate first proof step. The previous headless
 research-daemon concept is an application on top of this engine, not a restriction
 on general request operations.
 
@@ -86,6 +89,41 @@ attest Tor. This route has no Sphinx cover or ZK proof and currently supports
 bounded HTTPS HTTP/1.1 exchanges, not WebSockets, HTTP/3 or browser interception.
 Operators can observe hostnames/timing, and origins see request/account data.
 See the [local HTTPS client guide](../docs/local-https-client.md).
+
+## Optional offline response verification
+
+`zkweb verify` accepts a previously produced TLSNotary alpha.15 JSON presentation
+and an independent policy: the expected server, a trusted notary's compressed
+K256 public key and an explicit inclusive time window. The Go CLI bounds its
+input and invokes only the fixed sibling `zkweb-tlsn-verify` executable. The
+optional Rust backend rechecks policy and uses the upstream attestation/core
+verifier pinned to commit `47aee45b53e06648c1b2ad3689b367b8c923fdec`.
+
+Success returns metadata by default. Explicit, sorted ranges may return only
+fully authenticated transcript bytes, with at most 64 ranges per direction and
+1 MiB combined output. Full transcript lengths are capped at 1 MiB per direction
+before upstream deserialization; presentation JSON is capped at 16 MiB. A range
+through a hidden gap fails rather than producing substitute plaintext. Range
+selection controls the result, not disclosures already present in the input
+artifact.
+
+This is experimental TLSNotary attestation verification relative to the chosen
+notary, not a SNARK execution proof. It performs no network request and does not
+parse an HTTP status/body, verify a JSON predicate, bind an artifact to a
+separate `fetch` result or caller challenge, or establish exactly-once mutation
+execution. Proof capture/generation and application-specific complete-message
+and freshness/replay rules remain separate work. It supplies no anonymity or
+access/payment admission.
+
+`make build` remains Go-only. `make build-proof` builds the isolated Rust
+workspace and installs its release binary beside the client. `make test-proof`
+runs ten Rust cryptographic tests and the Go integration tests against that
+binary; ordinary `make test` skips the actual-backend integration unless
+`ZKWEB_TLSN_BACKEND` is set. The compatibility fixture's notary private key is
+public test material and its HTTP content is synthetic, so a passing fixture is
+not an authenticated receipt from a real website. See the
+[verification guide](../docs/response-verification.md) for the format, policy
+and test provenance.
 
 ## Opt-in HTTP adapter experiment
 
@@ -126,6 +164,7 @@ It has no payment authorization, wallet custody or zkAPI lease integration.
 | Random eligible selection with residence delay | Introduces reordering; the static single-host comparison cannot establish anonymity. |
 | Replay cache without eviction in a key epoch | Reject repeated packets; capacity exhaustion stops admissions. Production needs authenticated epochs, freshness and restart-safe replay handling. |
 | Synthetic `demo`/`compare` worker | Exercise the lab without leaking prompts or issuing paid calls; real HTTP work uses the separate opt-in `request` or `fetch` command with its documented route. |
+| Optional pinned TLSNotary verifier | Reuse upstream attestation verification for offline artifacts while keeping Rust proof dependencies out of ordinary Go builds; caller-selected notary trust remains necessary, and no capture or HTTP claim is implied. |
 
 ## What an adversary still sees
 
@@ -150,7 +189,7 @@ Long-term intersection and confirmation attacks need evaluation too.
 | 2: general bounded HTTP protocol | Large/binary request and response framing, expiring reply capabilities, bounded reassembly and explicit completion | Exact-byte HTTP fixtures; malformed/reordered/duplicate fragment tests; resource caps, cancellation, replay and lost epochs. Mutation outcomes remain unknown without a reply; no automatic retry of ambiguous writes. |
 | 3: contexts and useful request alpha | A local request API with scoped credentials, sessions, target capabilities and transport selection | Separate concurrent callers and accounts; prevent cookie/auth cross-context leakage; test CRUD, document fetches, SSRF/DNS policies and redirect policy. Measure cost/latency without claiming all-site compatibility. |
 | 4: extended web semantics | Reviewed streaming, WebSocket/CONNECT and browser integration designs where justified by transport choice | Long-lived cancellation/backpressure tests, bounded buffers, replay and recovery analysis, and mode-specific metadata/timing measurements. Do not apply asynchronous cover claims to interactive modes without evidence. |
-| 5: optional proof adapters | Anonymous access/payment proofs and optional selective verification of authenticated web data | First select protocols from the implementation research; define statements, verifier trust, freshness and replay binding, then run independent implementation/review tests. Neither adapter is implemented in the generic HTTP path. |
+| 5: optional proof adapters | Extend offline TLSNotary verification with proof capture, application claims and request/challenge binding; separately integrate anonymous access/payment where selected | Offline verification already checks upstream cryptography and caller-selected policy. Capture and application claims need complete-message parsing, explicit trust/freshness/replay statements and independent review tests. Anonymous admission remains separate from the generic HTTP path. |
 | 6: release and optional funded integration | Reviewed transport deployment and reproducible packages; compatible zkAPI stack only when that payment adapter is selected | Independent-host adversary evaluation and release recovery tests; for zkAPI funding, ceremony/code/proof pins, exact-release deposit/request/settlement/exit tests and conservative spend caps. No development setup substitution. |
 
 Stage 1 now has a process-isolated, synthetic 16-client comparison with clean,
@@ -162,7 +201,10 @@ file requirements; see [assessment](REFERENCE.md). The first part of stage 1 is
 implemented; independent-host evaluation remains open. `fetch` now supplies a
 TLS-preserving proxy route, bounded binary bodies and per-client Tor isolation,
 which are initial pieces of stages 2 and 3. Covered fragmentation, persistent
-session/daemon APIs and the remaining release/proof work remain open.
+session/daemon APIs and release work remain open. Stage 5 has an initial offline
+TLSNotary verification adapter with cryptographic tamper and policy tests;
+proof capture, application claims, request/challenge binding and anonymous
+admission remain open.
 
 The [first process comparison](evidence/process-comparison/report.md) found an
 unfinished clean job and queued cover/work at epoch end. The immediate transport

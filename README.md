@@ -29,9 +29,17 @@ Both modes use explicit destinations and caller-supplied credentials, disable re
 automatic retries, and report ambiguous delivery instead of repeating writes.
 `fetch` requires a configured proxy and has no direct fallback; it neither
 starts nor verifies Tor. Its Tor/SOCKS path has no Sphinx cover or ZK proof. The
-mixnet mode remains a single-machine experiment. Browser-wide compatibility,
-WebSockets/HTTP/3 and proof adapters remain future work; the inherited zkAPI
-wallet stack is separate.
+mixnet mode remains a single-machine experiment. Browser-wide compatibility
+and WebSockets/HTTP/3 remain future work; the inherited zkAPI wallet stack is
+separate.
+
+The optional `zkweb verify` tool checks an existing TLSNotary alpha.15 JSON
+presentation offline against an independently chosen notary key, server and
+explicit time window. It returns metadata by default, or selected authenticated
+transcript byte ranges. This experimental integration verifies an attestation
+relative to the caller's trusted notary; it is not a SNARK execution proof.
+It does not capture or generate proofs, parse HTTP claims, or bind an artifact
+to a separate `fetch` request. See the [verification guide](docs/response-verification.md).
 
 ```sh
 cd research-mixnet
@@ -39,7 +47,20 @@ make build
 ./bin/zkweb fetch --help
 ./bin/zkweb request --help
 make test
+
+# Optional Rust verifier, separate from the ordinary Go build:
+make build-proof
+./bin/zkweb verify --help
+make test-proof
 ```
+
+`make test-proof` runs the Rust cryptographic tests and Go integration tests
+against the release verifier. Ordinary `make test` skips those backend
+integration tests unless `ZKWEB_TLSN_BACKEND` is set. The verifier pins TLSNotary
+commit `47aee45b53e06648c1b2ad3689b367b8c923fdec`; its fixture uses a publicly
+known test notary private key and synthetic HTTP content. It is not an
+authenticated receipt from a real website. Proof capture and application-specific request/challenge binding
+remain future work.
 
 The module directory remains `research-mixnet/`; `research-mixnet` is also kept as
 a compatibility executable. Repository and upstream protocol identifiers retain
@@ -205,6 +226,7 @@ keys are a single-party development setup.
 | --- | --- |
 | `research-mixnet/` | Headless zkWeb prototype, HTTP worker and transport experiments |
 | `docs/web-request-research.md` | Current implementation research and general web request direction |
+| `docs/response-verification.md` | Optional offline TLSNotary verification, policy and limits |
 | `zkapi-clientd/` | Local ETH-funded OpenAI-compatible client and installer |
 | `sdk/` | Browser native ETH wallet, public artifacts and SDK tests |
 | `protocol/rust/` | Shared v2 types, BN254 helpers, circuits and Rust/WASM wallets |

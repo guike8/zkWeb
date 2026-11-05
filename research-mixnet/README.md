@@ -16,9 +16,10 @@ It runs headlessly with two explicit HTTP modes. `fetch` executes HTTP locally
 over an already-running Tor/SOCKS5 proxy, keeping TLS between the local client
 and origin and supporting bounded binary bodies. `request` carries a smaller
 UTF-8 exchange over the **loopback Sphinx/SURB experiment** to an HTTPS worker.
-`demo` and `compare` use synthetic jobs and emit aggregate JSON. The module does
-not provide its own production anonymity network or generate ZK proofs of
-access, execution or response contents.
+`demo` and `compare` use synthetic jobs and emit aggregate JSON. The optional
+`verify` tool checks already-produced TLSNotary presentations offline. The
+module does not provide its own production anonymity network or generate
+proofs of access, execution or response contents.
 See the [current implementation research](../docs/web-request-research.md) for the
 roles of private transport, anonymous access and selective data verification.
 
@@ -55,7 +56,9 @@ make compare
 ```
 
 `make build` produces `bin/zkweb` and the compatible `bin/research-mixnet`
-executable from the same source.
+executable from the same source. This ordinary build needs no Rust proof
+backend. The optional verifier has its own Rust workspace and dependencies;
+see [offline response verification](#offline-response-verification).
 
 Build dependencies download over the network. `demo` and `compare` bind only
 literal `127.0.0.1` addresses and contact only those listeners. They accept no
@@ -117,6 +120,42 @@ contents and any account identity. This path supplies no Sphinx cover or ZK
 proof, and does not yet support WebSockets, HTTP/3 or browser-wide interception.
 Read the [local HTTPS client guide](../docs/local-https-client.md) for the trust
 boundary, configuration and full limits.
+
+## Offline response verification
+
+`zkweb verify` verifies an existing TLSNotary alpha.15 JSON presentation without
+contacting an origin or notary. It uses the upstream cryptographic verifier,
+pinned to commit `47aee45b53e06648c1b2ad3689b367b8c923fdec`, through the fixed
+`zkweb-tlsn-verify` executable beside `zkweb`. The integration is experimental
+and retains upstream's non-production status.
+
+```sh
+# Requires the separately installed Rust 1.99 toolchain.
+make build-proof
+./bin/zkweb verify --help
+
+# Build the release backend, run ten Rust cryptographic tests, then run
+# the Go integration tests against that backend.
+make test-proof
+```
+
+The verifier requires the expected server, trusted notary public key and an
+explicit inclusive time window from the caller, independently of the artifact.
+It emits metadata only by default. Repeatable `--sent-range` and
+`--received-range` flags select authenticated transcript bytes with exclusive
+end offsets. A missing or unauthenticated byte makes verification fail; output
+contains no fabricated redaction bytes. Ordinary `make test` skips the actual
+backend integration tests unless `ZKWEB_TLSN_BACKEND` is set.
+
+This verifies an attestation under the selected notary's trust model, rather
+than a SNARK execution proof. It does not parse complete HTTP messages, bind a
+proof to a separate `fetch` result or application challenge, or establish
+exactly-once execution. Proof capture/generation, access admission and stronger
+application claims remain future work. The compatibility fixture uses a
+publicly known test notary private key and synthetic HTTP content; it is not a
+real website receipt.
+Read the [verification guide](../docs/response-verification.md) for policy flags,
+input format, limits and examples.
 
 ## Bounded HTTP requests
 
@@ -284,9 +323,11 @@ transfers need a reviewed fragmentation/reassembly protocol with independent
 response scheduling, resource limits and explicit completion semantics. The
 separate `fetch` mode already supports bounded binary HTTPS through a proxy,
 with different timing and trust assumptions. Streaming, WebSockets, CONNECT,
-persistent application sessions and optional proof adapters require separate
-designs and acceptance tests. X25519 here is not post-quantum protection, and
-Sphinx encryption is not a ZK execution proof.
+persistent application sessions and integrated proof capture require separate
+designs and acceptance tests. The offline TLSNotary verifier is an initial
+response-verification adapter; HTTP/application claims, request binding and
+anonymous access/payment admission are not integrated. X25519 here is not
+post-quantum protection, and Sphinx encryption is not a ZK execution proof.
 
 See [architecture and production milestones](ARCHITECTURE.md),
 [candidate applications](APPLICATIONS.md), and [validation evidence](evidence/README.md).

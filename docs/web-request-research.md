@@ -108,12 +108,14 @@ result or a claim that any one dependency has been independently audited here.
 
 ## Where this repository stands
 
-Implementation follow-through on 2026-11-05 added two explicit modes:
+Implementation follow-through on 2026-11-05 provides two HTTP modes and a
+separate optional verifier:
 
 | Mode | Implemented behavior | Boundary |
 | --- | --- | --- |
 | `zkweb fetch` | Local HTTP/1.1 over an explicit Tor/SOCKS5 TCP route, client-to-origin TLS, remote destination DNS, exact binary bodies, repeated headers and an origin-scoped reusable client. | Requires an already-running trusted loopback proxy and its resolved-address policy. Bodies default to 1 MiB, configurable up to 16 MiB. No cover schedule or ZK proof is attached to this mode. |
 | `zkweb request` | Seven methods and bounded UTF-8 requests through scheduled local Sphinx/SURB links to a direct HTTPS worker. | Worker receives plaintext requests and credentials. Frames carry at most 4,090 bytes of application data including the request's reply envelope; all mix nodes remain on one machine. |
+| `zkweb verify` | Offline verification of TLSNotary alpha.15 JSON presentations against an external notary key, expected server name and explicit time window; optionally exports authenticated transcript ranges. | Requires a separately built pinned Rust backend. No proof capture, fetch binding, HTTP statement parser or network anonymity claim is added. |
 
 The local route uses fresh per-client Tor isolation parameters and explicit
 per-request credentials, with no ambient proxy or cookie jar. It does not
@@ -121,12 +123,32 @@ operate a relay network or independently verify the local proxy's Tor identity
 or configuration. Local SOCKS/TLS tests are evidence of protocol behavior, not a
 live-network anonymity or performance evaluation.
 
-There is no generic HTTP access-proof, payment or response-proof integration,
-persistent session API, HTTP/2 or HTTP/3, WebSocket support or browser-wide
-interception. Covered-mode binary fragmentation remains open; the new local
-route's bounded binary transfers do not implement it. The inherited zkAPI
-wallet/proof stack remains separate. See the
+The initial verification adapter uses `tlsn-attestation` and `tlsn-core` from
+alpha.15 commit `47aee45b53e06648c1b2ad3689b367b8c923fdec`, independently of
+the wallet workspaces. It validates the upstream attestation, server identity
+and transcript commitments, then applies caller-selected authenticated ranges.
+The implementation checks sparse transcript sizes before typed deserialization
+and accepts JSON rather than an arbitrary bincode import. Its test vectors
+include a public development signing key and synthetic HTTP data; they establish
+compatibility and tamper rejection, not a real website receipt.
+[Pinned presentation verifier](https://github.com/tlsnotary/tlsn/blob/47aee45b53e06648c1b2ad3689b367b8c923fdec/crates/attestation/src/presentation.rs),
+[pinned transcript representation](https://github.com/tlsnotary/tlsn/blob/47aee45b53e06648c1b2ad3689b367b8c923fdec/crates/core/src/transcript.rs).
+
+This choice also reflects a concrete Reclaim boundary: its exported signature
+checker does not itself rerun the TLS/ZK verification, and ordinary returned
+claim results omit the transcript. A future Reclaim receipt adapter would need
+an explicit trusted-attestor claim model rather than the same verification
+statement as a TLSN presentation.
+[Signature checker](https://github.com/reclaimprotocol/attestor-core/blob/8f7804e553900dff57c57e9d9394773d884f68b0/src/utils/claims.ts),
+[claim handler](https://github.com/reclaimprotocol/attestor-core/blob/8f7804e553900dff57c57e9d9394773d884f68b0/src/server/handlers/claimTunnel.ts).
+
+Proof capture/generation, automatic request/fetch binding, anonymous HTTP
+access/payment, a persistent session API, HTTP/2 or HTTP/3, WebSockets and
+browser-wide interception remain open. Covered-mode binary fragmentation is
+also separate from the local route's bounded binary transfers. The inherited
+zkAPI wallet/proof stack remains separate. See the
 [local HTTPS guide](local-https-client.md),
+[offline verification guide](response-verification.md),
 [prototype modes](../research-mixnet/README.md) and
 [milestones](../research-mixnet/ARCHITECTURE.md).
 
@@ -144,7 +166,7 @@ deployment pins.
 | 2 | Extend bounded binary transfers to covered mode and streaming interfaces | Binary bodies now work in the local TLS route. Covered mode still needs fragment ordering/replay/resource limits; future streaming needs backpressure/cancellation bounds. |
 | 3 | Compare a deployed mixnet integration with the existing lab and a Tor route | Independent-host tests, measured completion/latency/bandwidth, fault behavior and explicit adversary assumptions. Do not equate synthetic timing scores with anonymity. |
 | 4 | Optional anonymous admission/credits | Pin one protocol; test issuance/redemption, replay and linkability boundaries; retain existing wallet release gates for any funded adapter. |
-| 5 | Optional selectively verifiable response | Pin and compare TLSN/Reclaim versions, supported TLS/sites, proof cost, disclosure/redaction, freshness and verifier trust. |
+| 5 | Extend initial offline TLSN verification into capture and explicit application statements | The pinned backend has actual signature/identity/commitment and tamper tests. Capture must define route, disclosures, challenge/fetch binding, notary trust and mutation recovery without refetching writes. |
 | 6 | Streaming, WebSockets and browser integration where feasible | Protocol-specific conformance, session isolation and long-lived-flow measurements. Declare unsupported combinations and different timing guarantees. |
 
 The existing mutation rule remains: a lost response can leave the remote side

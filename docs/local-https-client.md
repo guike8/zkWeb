@@ -146,6 +146,9 @@ isolation, no-auth downgrade refusal, limits, cancellation and no mutation retry
 after a lost response. No live Tor anonymity or performance result is claimed.
 
 HTTP/2, HTTP/3, WebSockets, browser-wide routing, a persistent session API, Nym
-integration and ZK authorization/response-proof adapters remain future work.
+integration, anonymous authorization and proof capture remain future work.
+The optional [offline TLSNotary verifier](response-verification.md) checks
+already-produced presentations separately; it does not attach a proof to
+`fetch` or repeat the request.
 The [architecture](../research-mixnet/ARCHITECTURE.md) and
 [implementation comparison](web-request-research.md) describe those boundaries.

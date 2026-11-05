@@ -1,0 +1,19 @@
+The following files and test constructions originate from TLSNotary:
+
+  tests/fixtures/upstream-presentation.bin
+  tests/fixtures/presentation.json (JSON conversion of the upstream fixture)
+  tests/verify.rs partial_fixture construction (adapted from the upstream generator)
+
+Source: https://github.com/tlsnotary/tlsn
+Pinned commit: 47aee45b53e06648c1b2ad3689b367b8c923fdec
+Upstream generator: crates/attestation/tests/fixtures/generate_presentation_fixture.rs
+
+The upstream README states:
+"All crates in this repository are licensed under either of
+- Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license (http://opensource.org/licenses/MIT)
+at your option."
+
+This notice retains upstream attribution. The fixture is synthetic public test
+material, including a publicly known notary test key. It is not production trust
+configuration or evidence of actual HTTP data from the certified domain.

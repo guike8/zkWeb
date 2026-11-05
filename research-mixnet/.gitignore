@@ -1,3 +1,4 @@
 /bin/
+/proof-verifier/target/
 /evidence/local-*.json
 /evidence/local-*/
