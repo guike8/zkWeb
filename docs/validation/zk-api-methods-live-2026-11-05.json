@@ -1,0 +1,76 @@
+{
+  "completed_utc": "2026-11-05T21:32:56.849801Z",
+  "format": "zkweb-zk-live-methods-evidence-v1",
+  "fresh_profile_members": 2,
+  "limitations": "Request-inspection API echo validation, not durable CRUD storage or a proof of upstream execution. Request contents are visible to the gateway and provider. Echoed source addresses and response bodies are not saved.",
+  "public_dns_and_webpki_defaults": true,
+  "responses": [
+    {
+      "assertion": "provider echoed exact method, URL/query, ordered repeated headers and payload; no proof, Authorization or Cookie headers",
+      "body_bytes": 919,
+      "body_sha256": "e156daa6462cfc13c5debef52f153f08fb2f54a1fd45999de2313881daa0ac59",
+      "elapsed_ms": 499,
+      "method": "GET",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    },
+    {
+      "assertion": "HEAD response body is empty",
+      "body_bytes": 0,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "elapsed_ms": 514,
+      "method": "HEAD",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    },
+    {
+      "assertion": "provider echoed exact method, URL/query, ordered repeated headers and payload; no proof, Authorization or Cookie headers",
+      "body_bytes": 1101,
+      "body_sha256": "65ca0b5fc650be5960c75561dc33e14f365fe3b7433bf025d129aced8992bb78",
+      "elapsed_ms": 482,
+      "method": "POST",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    },
+    {
+      "assertion": "provider echoed exact method, URL/query, ordered repeated headers and payload; no proof, Authorization or Cookie headers",
+      "body_bytes": 1100,
+      "body_sha256": "090f90980ec325af71514376ae31964914802558ac268ec49808ed170a974fb6",
+      "elapsed_ms": 497,
+      "method": "PUT",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    },
+    {
+      "assertion": "provider echoed exact method, URL/query, ordered repeated headers and payload; no proof, Authorization or Cookie headers",
+      "body_bytes": 1102,
+      "body_sha256": "e1c2febc9696a910da3fa8cc6a99ca225088fd32b49b35570c9442dd58cade29",
+      "elapsed_ms": 506,
+      "method": "PATCH",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    },
+    {
+      "assertion": "provider echoed exact method, URL/query, ordered repeated headers and payload; no proof, Authorization or Cookie headers",
+      "body_bytes": 1103,
+      "body_sha256": "eb401d8befe92f743ecb180521a0ff980d3578c81c39e1a1cd42f7f6eeb56c6d",
+      "elapsed_ms": 473,
+      "method": "DELETE",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    },
+    {
+      "access_control_allow_methods": "GET, POST, HEAD, PUT, DELETE, PATCH, QUERY, OPTIONS",
+      "assertion": "OPTIONS preflight has an empty body and advertises all seven tested methods; payload echo is unavailable",
+      "body_bytes": 0,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "elapsed_ms": 400,
+      "method": "OPTIONS",
+      "path": "/anything?raw=%2F\u0026same=first\u0026same=second",
+      "upstream_status": 200
+    }
+  ],
+  "started_utc": "2026-11-05T21:32:53.059117Z",
+  "upstream": "https://httpbingo.org",
+  "upstream_authorization": "public API; no token or injected credentials"
+}

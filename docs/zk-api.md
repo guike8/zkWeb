@@ -131,3 +131,60 @@ the seven target methods, repeated headers, path/query preservation, a 1 MiB
 binary round trip, upstream statuses and redirects, TLS trust, tampering,
 replay and unknown-delivery behavior. It makes no requests to a real external
 API account.
+
+### Live public API test
+
+Run the actual CLI and proof-verifying gateway against GitHub's public API and
+the [httpbingo request-inspection service](https://httpbingo.org/):
+
+```sh
+cd research-mixnet
+make test-zk-live
+
+# Optionally save sanitized evidence to an existing directory:
+ZKWEB_ZK_LIVE_REPORT=/absolute/path/github-live.json \
+ZKWEB_ZK_LIVE_METHODS_REPORT=/absolute/path/methods-live.json \
+  make test-zk-live
+```
+
+The GitHub check provisions a fresh two-member group and configures only
+GET/HEAD under `/repos/guike8/zkWeb`. It uses the default public-address checks
+and HTTPS certificate verification, with no token, custom CA, private-network
+override, proxy or upstream mutations. It checks the repository, a pinned
+commit, query parameters, an empty HEAD body, and the distinction between an
+upstream error and a gateway rejection. Fresh proofs are altered to check method,
+path/query, header and proof binding; a captured successful authorization is also
+replayed and rejected.
+
+A second fresh group/gateway sends all seven HTTP methods to
+`https://httpbingo.org/anything`, with disposable test data. It checks echoed
+methods, queries, headers and payloads for GET/POST/PUT/PATCH/DELETE, an empty
+HEAD body, and OPTIONS preflight metadata. The provider's
+[preflight middleware](https://github.com/mccutchen/go-httpbin/blob/main/httpbin/middleware.go)
+returns an empty OPTIONS response with allowed methods instead of echoing its
+payload. The echo checks also confirm that ZK protocol headers do not reach the
+upstream. This tests real external method/body transport; the echo service does
+not establish persistent CRUD storage.
+
+The optional report records statuses, selected public response headers, response
+sizes/hashes, timings and assertion results. It excludes credentials, setup files,
+challenges, tags and proofs. Temporary setup files are removed when the test exits.
+The test needs internet access and an available GitHub unauthenticated rate limit;
+it fails on network/provider errors and makes no automatic retry.
+
+The [GitHub live report](validation/zk-api-live-2026-11-05.json) and
+[method echo report](validation/zk-api-methods-live-2026-11-05.json) record the
+2026-11-05 runs. Rejection statuses are observed at the gateway; GitHub's internal
+request count is not observable in this test. The owned fixture separately checks
+that failed authorization does not call its upstream. These tests establish
+request authorization and transport behavior, not a proof of upstream execution.
+
+For a public GitHub request, ZK hides the member secret and membership path from
+the gateway; it adds no request-content privacy. HTTPS supplies encryption in
+transit. GitHub sees the gateway's IP because it proxies the request. Both the
+gateway and GitHub see the request contents. None of those content or IP
+properties are supplied by the ZK membership proof.
+
+The [compact client/server design](compact-zk-client-server.md) separates current
+wire sizes from a proposed binary exchange that reduces repeated metadata and
+text encoding. That transport is not implemented yet.

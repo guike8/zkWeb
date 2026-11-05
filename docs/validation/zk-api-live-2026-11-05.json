@@ -1,0 +1,103 @@
+{
+  "binary_sha256": {
+    "zkweb": "67cb37689847864d6b3ba43d5d1bd7431e898c11fabec560838f2b4295834f7a",
+    "zkweb-zk-listener": "0a316f4b7e38cdfe41db263b4efc58185216c44cdb1ee61b78685a2efbadddc3"
+  },
+  "completed_utc": "2026-11-05T21:33:02.039935Z",
+  "format": "zkweb-zk-live-api-evidence-v1",
+  "fresh_authorizations": 11,
+  "fresh_profile_members": 2,
+  "groth16_proof_bytes": 128,
+  "limitations": "Read-only external API calls. Rejections are observed at the gateway; no upstream-side request counter or proof of upstream execution is available. Request contents are visible to the gateway and GitHub.",
+  "public_dns_and_webpki_defaults": true,
+  "rejections": [
+    {
+      "case": "signed_method",
+      "gateway_status": 401
+    },
+    {
+      "case": "signed_path_query",
+      "gateway_status": 401
+    },
+    {
+      "case": "signed_headers",
+      "gateway_status": 401
+    },
+    {
+      "case": "proof",
+      "gateway_status": 401
+    },
+    {
+      "case": "missing_proof",
+      "gateway_status": 401
+    },
+    {
+      "case": "replay",
+      "gateway_status": 401
+    },
+    {
+      "case": "path_scope",
+      "gateway_status": 403
+    }
+  ],
+  "responses": [
+    {
+      "method": "GET",
+      "path": "/repos/guike8/zkWeb",
+      "upstream_status": 200,
+      "github_request_id": "FF7A:204D72:3E33C1:CBCB25:6AECF609",
+      "upstream_date": "Thu, 05 Nov 2026 21:32:57 GMT",
+      "body_bytes": 14629,
+      "body_sha256": "110b69562f3731217053c2937c401281578c7134315de905a5a3625075d96b3e",
+      "elapsed_ms": 782,
+      "assertion": "full_name is guike8/zkWeb and repository is public"
+    },
+    {
+      "method": "GET",
+      "path": "/repos/guike8/zkWeb/commits/d2a4e2d707af9c7c33fc611c448895847cfa8d17",
+      "upstream_status": 200,
+      "github_request_id": "FF84:309AD:41620A:D6516E:6AECF60A",
+      "upstream_date": "Thu, 05 Nov 2026 21:32:58 GMT",
+      "body_bytes": 208904,
+      "body_sha256": "768b7d6ebdcbeeb3cc1a8e448a42a66cd3031977980e9ec0d0c04cf60f63c8f6",
+      "elapsed_ms": 795,
+      "assertion": "commit SHA matches pinned gateway implementation"
+    },
+    {
+      "method": "GET",
+      "path": "/repos/guike8/zkWeb/commits?per_page=1",
+      "upstream_status": 200,
+      "github_request_id": "FF8D:1F561E:3DF528:CBB9A9:6AECF60A",
+      "upstream_date": "Thu, 05 Nov 2026 21:32:59 GMT",
+      "body_bytes": 3224,
+      "body_sha256": "2a68d6530c08e9e08d379fd87ce0cfd2c146ed93aacc73a780e2eb01b26a944e",
+      "elapsed_ms": 652,
+      "assertion": "per_page=1 returns exactly one commit"
+    },
+    {
+      "method": "HEAD",
+      "path": "/repos/guike8/zkWeb",
+      "upstream_status": 200,
+      "github_request_id": "C029:240F5F:3D61DE:C946D6:6AECF60B",
+      "upstream_date": "Thu, 05 Nov 2026 21:32:57 GMT",
+      "body_bytes": 0,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "elapsed_ms": 725,
+      "assertion": "HEAD response body is empty"
+    },
+    {
+      "method": "GET",
+      "path": "/repos/guike8/zkWeb/contents/zkweb-live-probe-missing-d2a4e2d707af9c7c33fc611c448895847cfa8d17",
+      "upstream_status": 404,
+      "github_request_id": "C033:43667:3D57D0:C92D25:6AECF60C",
+      "upstream_date": "Thu, 05 Nov 2026 21:33:00 GMT",
+      "body_bytes": 127,
+      "body_sha256": "e45906ce02e79f16fb87a838d86bb4e497e37a9591f97608fa013bbcd8b9cbc2",
+      "elapsed_ms": 585,
+      "assertion": "provider 404 is returned as upstream data"
+    }
+  ],
+  "started_utc": "2026-11-05T21:32:56.85564Z",
+  "upstream": "https://api.github.com",
+  "upstream_authorization": "public API; no token or injected credentials"
+}

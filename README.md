@@ -136,6 +136,7 @@ From `research-mixnet/`:
 
 ```sh
 make test-zk   # Real proofs, record listener and HTTPS API gateway integration
+make test-zk-live # Opt-in real HTTPS APIs: GitHub reads and httpbingo method echoes
 make test     # Go race regression suite
 make vet
 ```
@@ -143,6 +144,11 @@ make vet
 The ZK backend is an independent Rust workspace with no TFHE, wallet-funding or
 chain-oracle dependency. `make build` supplies command wrappers; `make build-zk`
 installs the optional proof backend beside `zkweb`.
+
+The live tests use fresh credentials for two group members, check public API
+responses and seven HTTP methods, and reject replayed and tampered
+authorization. They use no API tokens. See the
+[live-test instructions and recorded results](docs/zk-api.md#live-public-api-test).
 
 Read the [architecture](research-mixnet/ARCHITECTURE.md) and
 [implementation research](docs/web-request-research.md) for the broader plan.

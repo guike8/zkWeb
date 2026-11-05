@@ -147,6 +147,13 @@ profile. Anonymous group authorization does not supply network anonymity,
 request encryption, server response proofs or an authenticated remote service.
 See the [detailed listener guide](../docs/zk-listener.md).
 
+The external API gateway also has an explicit live check: `make test-zk-live`
+uses fresh two-member credentials to send GET/HEAD requests through the actual
+CLI and gateway to GitHub's public HTTPS API, plus seven methods through
+httpbingo. It checks responses and rejects replay and authorization
+tampering without an API token. This network test is
+separate from ordinary tests; see the [live-test guide](../docs/zk-api.md#live-public-api-test).
+
 ## Private requests with a cooperating destination
 
 This retained v1 FHE lookup is separate from the current authorization-listener
