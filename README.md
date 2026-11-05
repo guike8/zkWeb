@@ -1,20 +1,40 @@
 # zkWeb
 
-**Working name.** zkWeb is a general web request privacy toolkit in development,
-forked from zkAPI. Its scope is HTTP requests across the web: API CRUD, document
-fetches and application or agent egress. AI inference and private research are
-applications of the same request engine.
+**Working name.** zkWeb is developing web requests whose private inputs stay
+encrypted while a cooperating destination processes them. The first prototype
+uses TFHE-rs fully homomorphic encryption (FHE) and a mandatory zero-knowledge
+input proof: the server verifies the proof, computes over an encrypted record
+selector, and returns an encrypted result for the client to decrypt.
 
-The interface covers methods, origins/paths, headers, request bodies, response
-statuses and response bodies. The local client supports bounded binary transfers;
-the roadmap extends covered transfers, streaming and session support. Transport
-privacy, anonymous access or payment proofs, and optional proofs about selected response
-data have different trust assumptions and are separate parts of the design.
+The broader goal includes private reads and writes for cooperating web services.
+The current protocol reads one of four public values; it does not make arbitrary
+existing websites or generic CRUD handlers process hidden requests. Transport
+anonymity, authorization/payment and response attestation remain separate
+capabilities. This fork retains the upstream zkAPI wallet stack for compatibility.
 
 ## What works today
 
-The [headless client](research-mixnet/README.md) supports `GET`, `HEAD`, `POST`,
-`PUT`, `PATCH`, `DELETE` and `OPTIONS` through two explicit modes:
+The [headless client](research-mixnet/README.md) provides an experimental
+private read through `private-setup`, `private-serve` and
+`private-query`. The selected index `0..3` is encrypted and ZK-proven before
+being sent over HTTP; the cooperating server homomorphically selects from
+`[11, 22, 33, 44]` without learning the index or decrypting the result. Only
+numeric loopback endpoints are enabled. See the
+[private-request guide](docs/private-requests.md) for the proof statement,
+offline provisioning and run instructions.
+
+The proof checks correct encryption of the two-bit selector; FHE supplies
+confidentiality. It does not prove that a malicious server computed the answer
+correctly. The endpoint, public operation, profile/session identifiers, IP,
+timing and sizes remain visible. The client secret stays in the client profile;
+the destination receives evaluation/public material only. This requires trusted
+offline key/CRS provisioning and a pinned profile. Challenges bound to a fresh
+server instance, profile and expiry constrain request replay. The protocol is
+experimental; it is not a production deployment or isolation boundary between
+processes on one machine.
+
+Separate HTTP transport modes support `GET`, `HEAD`, `POST`, `PUT`, `PATCH`,
+`DELETE` and `OPTIONS`:
 
 - `fetch` runs HTTP locally through an already-running loopback Tor/SOCKS5
   proxy. TLS terminates at the local client and destination, so an application
@@ -25,7 +45,8 @@ The [headless client](research-mixnet/README.md) supports `GET`, `HEAD`, `POST`,
   worker sees the HTTP plaintext. Synthetic `demo` and `compare` commands
   exercise cover traffic and timing/fault measurements separately.
 
-Both modes use explicit destinations and caller-supplied credentials, disable redirects and
+Both transport modes disclose ordinary request contents to the destination.
+They use explicit destinations and caller-supplied credentials, disable redirects and
 automatic retries, and report ambiguous delivery instead of repeating writes.
 `fetch` requires a configured proxy and has no direct fallback; it neither
 starts nor verifies Tor. Its Tor/SOCKS path has no Sphinx cover or ZK proof. The
@@ -44,15 +65,26 @@ to a separate `fetch` request. See the [verification guide](docs/response-verifi
 ```sh
 cd research-mixnet
 make build
+./bin/zkweb private-query --help
 ./bin/zkweb fetch --help
 ./bin/zkweb request --help
 make test
+
+# Optional FHE + ZK private-request backend, separate from the Go build:
+make build-private
+make test-private
 
 # Optional Rust verifier, separate from the ordinary Go build:
 make build-proof
 ./bin/zkweb verify --help
 make test-proof
 ```
+
+`make build` includes the private command wrappers and help without compiling
+TFHE-rs. `make build-private` installs the separate `zkweb-private` backend;
+`make test-private` runs its cryptographic checks and real HTTP integration.
+The private backend pins TFHE-rs 1.8.2 and uses full upstream parameter sets,
+with no reduced-security toy mode.
 
 `make test-proof` runs the Rust cryptographic tests and Go integration tests
 against the release verifier. Ordinary `make test` skips those backend
@@ -74,8 +106,8 @@ their existing names. Read the [implementation research](docs/web-request-resear
 
 The sections below document the inherited zkAPI wallet, billing and operator
 components. Their original names, protocol identifiers, deployment pins and
-provenance are retained for compatibility. These components do not make the
-current zkWeb HTTP adapter a ZK-proven request service.
+provenance are retained for compatibility. Their proofs concern funding and
+authorization; those proofs do not hide HTTP content from its destination.
 
 zkAPI lets you pay for AI and other APIs with ETH and make unlinkable requests.
 It keeps API usage separate from your on-chain deposit: the service can verify
@@ -224,7 +256,9 @@ keys are a single-party development setup.
 
 | Directory | Purpose |
 | --- | --- |
-| `research-mixnet/` | Headless zkWeb prototype, HTTP worker and transport experiments |
+| `research-mixnet/` | Headless zkWeb commands, private requests and separate transport experiments |
+| `research-mixnet/private-request/` | Optional TFHE-rs backend for ZK-verified encrypted queries and FHE evaluation |
+| `docs/private-requests.md` | Private-request protocol, setup, run instructions and trust boundaries |
 | `docs/web-request-research.md` | Current implementation research and general web request direction |
 | `docs/response-verification.md` | Optional offline TLSNotary verification, policy and limits |
 | `zkapi-clientd/` | Local ETH-funded OpenAI-compatible client and installer |

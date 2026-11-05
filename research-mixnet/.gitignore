@@ -1,4 +1,8 @@
 /bin/
 /proof-verifier/target/
+/private-request/target/
+/.zkweb-private/
+# Generated client secrets and other TFHE provisioning objects.
+*.tfhe
 /evidence/local-*.json
 /evidence/local-*/

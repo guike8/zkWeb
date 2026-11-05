@@ -1,9 +1,16 @@
 # zkWeb headless prototype
 
-zkWeb is the working name for a general web request privacy toolkit. This module
-is its first transport and HTTP adapter prototype. API CRUD, web fetching,
-private application egress and AI/research tools share the request engine; the
-product scope extends beyond an AI API wrapper or research daemon.
+zkWeb is the working name for web requests whose private inputs stay encrypted
+while a cooperating destination processes them. The first private-request
+prototype combines TFHE-rs FHE with a mandatory zero-knowledge proof of correct
+input encryption. The destination verifies the proof, performs an encrypted
+lookup and returns a ciphertext that only the client decrypts.
+
+The hidden input is an index `0..3` selecting one of `[11, 22, 33, 44]`. The
+endpoint and operation remain public. This is a real cryptographic prototype,
+not a production service or private CRUD support for unchanged websites. See
+the [private-request guide](../docs/private-requests.md) for the exact relation,
+key/CRS trust assumptions and limits.
 
 The transport work builds on
 [Vitalik's zkAPI/Tor/rewriting experiment](https://x.com/VitalikButerin/status/2111046730959433793)
@@ -12,16 +19,20 @@ The fork starts at `vbuterin/zkapi` commit
 `0fb263b0da04986cfe5c63b12340c1581018ae9b`. The source directory, Go module path
 and upstream protocol identifiers retain their historical names.
 
-It runs headlessly with two explicit HTTP modes. `fetch` executes HTTP locally
-over an already-running Tor/SOCKS5 proxy, keeping TLS between the local client
-and origin and supporting bounded binary bodies. `request` carries a smaller
-UTF-8 exchange over the **loopback Sphinx/SURB experiment** to an HTTPS worker.
-`demo` and `compare` use synthetic jobs and emit aggregate JSON. The optional
-`verify` tool checks already-produced TLSNotary presentations offline. The
-module does not provide its own production anonymity network or generate
-proofs of access, execution or response contents.
-See the [current implementation research](../docs/web-request-research.md) for the
-roles of private transport, anonymous access and selective data verification.
+The other headless tools retain separate roles:
+
+| Commands | Implemented role | Destination visibility |
+| --- | --- | --- |
+| `private-setup`, `private-serve`, `private-query` | Offline provisioned, ZK-verified encrypted selector and FHE lookup over loopback HTTP | Ciphertext, proof and public protocol context; no plaintext selector or client secret key |
+| `fetch` | Bounded binary HTTPS over an already-running Tor/SOCKS5 proxy, with TLS between local client and origin | Ordinary HTTP request contents and account identity |
+| `request` | Small UTF-8 HTTP exchange over the loopback Sphinx/SURB experiment to an HTTPS worker | Worker and destination see ordinary HTTP request contents |
+| `verify` | Offline verification of an existing TLSNotary presentation | No request is issued; this does not hide inputs from their source website |
+| `demo`, `compare` | Synthetic transport jobs and aggregate measurements | Single-machine lab, not a production anonymity network |
+
+FHE hides the private selector; the ZK proof admits correctly formed encrypted
+inputs. It does not prove authorization or correct server computation. See the
+[current implementation research](../docs/web-request-research.md) for the
+different trust boundaries.
 
 ## Run
 
@@ -36,6 +47,7 @@ make test
 make vet
 make build
 ./bin/zkweb fetch --help
+./bin/zkweb private-query --help
 ./bin/zkweb demo
 
 # Same fixed schedules, with no jobs at all:
@@ -56,9 +68,11 @@ make compare
 ```
 
 `make build` produces `bin/zkweb` and the compatible `bin/research-mixnet`
-executable from the same source. This ordinary build needs no Rust proof
-backend. The optional verifier has its own Rust workspace and dependencies;
-see [offline response verification](#offline-response-verification).
+executable from the same source. This ordinary build includes the private
+command wrappers and help without Rust or TFHE dependencies. Each optional
+backend has its own Rust workspace: [private requests](#private-requests-with-a-cooperating-destination)
+use `make build-private`; [offline response verification](#offline-response-verification)
+uses `make build-proof`.
 
 Build dependencies download over the network. `demo` and `compare` bind only
 literal `127.0.0.1` addresses and contact only those listeners. They accept no
@@ -67,6 +81,61 @@ Ctrl+C cancels the run and joins workers and peer subprocesses. The `demo` comma
 returns a nonzero status for incomplete jobs. The `compare` command records
 incomplete jobs as measurements, since loss and disconnection are deliberate.
 Dropped observation events invalidate that trial's attack scores.
+
+## Private requests with a cooperating destination
+
+The optional `zkweb-private` backend pins TFHE-rs 1.8.2. It uses full upstream
+computation, compact-public-key-encryption and key-switching parameters, with no
+toy reduction. The build requires the Rust 1.99 toolchain through `rustup`.
+Key generation, proving and homomorphic evaluation can take substantial time
+and resources; no benchmark is implied by this example.
+
+```sh
+# From research-mixnet, after make build:
+make build-private
+./bin/zkweb private-setup --output /tmp/zkweb-private-demo
+./bin/zkweb private-serve \
+  --server-dir /tmp/zkweb-private-demo/server \
+  --listen 127.0.0.1:0
+```
+
+Choose a fresh setup output directory. The server prints a READY JSON record
+with its actual URL. Keep it running; in another terminal, replace `PORT` with
+the chosen port:
+
+```sh
+./bin/zkweb private-query \
+  --client-dir /tmp/zkweb-private-demo/client \
+  --url http://127.0.0.1:PORT \
+  --index 2
+
+# Cryptographic checks and real HTTP integration against the optional backend:
+make test-private
+```
+
+The client prints index `2` and decrypted value `33` locally. HTTP carries only
+the challenge identifier and a proven ciphertext as the query payload. The
+server safely decodes and checks conformance, requires one encrypted `FheUint2`,
+and verifies its ZK proof before FHE evaluation. Successful replies use the same
+ciphertext type and response structure for all four choices.
+
+Provisioning creates `client/` with the secret `ClientKey` and `server/` with
+evaluation/public material only; the server directory never contains the
+decryption key. Give a destination operator only the server directory. The
+offline provisioner and CRS generation must be trusted; profile hashes pin the
+configuration, CRS and registered keys but do not prove honest setup. Both
+processes on one machine are not isolated from that machine's administrator.
+
+Public proof metadata binds the protocol, fixed lookup function, profile,
+server instance, challenge and expiry. Bounded, expiring one-use challenges and
+a new instance on restart constrain replay. The endpoint, operation, source IP,
+profile/session identity, timings and sizes remain visible. The input proof
+does not establish correct evaluation or a fresh answer from a malicious server.
+
+Only numeric loopback HTTP endpoints are enabled. More general encrypted reads
+or writes require a cooperating backend designed for encrypted computation;
+this protocol does not privately forward an arbitrary REST request. Read the
+[private-request guide](../docs/private-requests.md) before using or extending it.
 
 ## Local HTTPS through Tor/SOCKS5
 
@@ -224,7 +293,7 @@ Caller-supplied credentials and bodies are disclosed to the worker and target.
 They do not become anonymous by being inside a Sphinx cell. The operator of this
 single-process lab can inspect every node. Use test data when evaluating it.
 
-## What runs
+## What runs in the transport lab
 
 ```text
 client upload clocks -> mix F1 -> mix F2 -> mix F3 -> synthetic worker
@@ -311,6 +380,15 @@ This is not a cap on TCP wire bytes and not a provider-cost estimate.
 
 ## Limits and next work
 
+The private-request priority is to extend useful cooperating-server functions,
+evaluate malicious-server behavior and result integrity, and define encrypted
+state updates before claiming private CRUD. Input-proof verification alone
+does not prove correct FHE execution. A remote deployment also needs a reviewed
+profile-registration/provisioning and authenticated transport design. The
+current loopback example exposes endpoint/session/IP/timing/size metadata and
+adds no network anonymity or production ceremony.
+
+The separate transport experiments have their own remaining work.
 The demo uses one process; the comparison uses separate address spaces under one
 OS user on one machine. Those processes are not a sandbox or independent operators.
 This demonstrates protocol plumbing, **not an anonymity set**, and does not
@@ -342,6 +420,9 @@ This directory's prototype source is AGPL-3.0-or-later; see [LICENSE](LICENSE).
 It links Katzenpost's AGPL Sphinx implementation. Upstream `zkapi-clientd` keeps
 its own MIT license. This does not apply a new license to the rest of zkapi.
 Review the complete distribution's notices and licenses before packaging it.
+The optional private backend pins a separate TFHE-rs dependency; its provenance
+and upstream licensing references are in the
+[private-request guide](../docs/private-requests.md#why-this-implementation).
 
 Loopix and Echomix supply prior designs and analysis; their guarantees do not
 automatically apply to this experiment:

@@ -1,7 +1,8 @@
-.PHONY: test build build-proof test-proof demo vet compare
+.PHONY: test build build-proof test-proof build-private test-private demo vet compare
 
 # Keep optional Rust proof dependencies out of the ordinary Go build.
 PROOF_TARGET_DIR ?= proof-verifier/target
+PRIVATE_TARGET_DIR ?= private-request/target
 
 # The upstream algorithm registry requires CGO and a C compiler, even though
 # this experiment explicitly selects X25519 (no post-quantum claim).
@@ -20,6 +21,13 @@ build-proof:
 test-proof: build-proof
 	RUSTC="$$(rustup which --toolchain 1.99.0 rustc)" RUSTDOC="$$(rustup which --toolchain 1.99.0 rustdoc)" CARGO_TARGET_DIR="$(abspath $(PROOF_TARGET_DIR))" rustup run 1.99.0 cargo test --locked --manifest-path proof-verifier/Cargo.toml
 	ZKWEB_TLSN_BACKEND="$(abspath bin/zkweb-tlsn-verify)" go test -race -count=1 ./internal/proof -run TestTLSNBackendIntegration
+build-private:
+	RUSTC="$$(rustup which --toolchain 1.99.0 rustc)" RUSTDOC="$$(rustup which --toolchain 1.99.0 rustdoc)" CARGO_TARGET_DIR="$(abspath $(PRIVATE_TARGET_DIR))" rustup run 1.99.0 cargo build --locked --release --manifest-path private-request/Cargo.toml
+	mkdir -p bin
+	cp "$(PRIVATE_TARGET_DIR)/release/zkweb-private" bin/zkweb-private
+test-private: build build-private
+	RUSTC="$$(rustup which --toolchain 1.99.0 rustc)" RUSTDOC="$$(rustup which --toolchain 1.99.0 rustdoc)" CARGO_TARGET_DIR="$(abspath $(PRIVATE_TARGET_DIR))" rustup run 1.99.0 cargo test --locked --release --manifest-path private-request/Cargo.toml -- --test-threads=1
+	ZKWEB_PRIVATE_CLI="$(abspath bin/zkweb)" go test -race -count=1 ./internal/privatee2e -run TestPrivateBackendIntegration -timeout 20m
 demo:
 	go run ./cmd/research-mixnet demo
 compare: build

@@ -1,38 +1,112 @@
 # zkWeb: architecture and milestones
 
-zkWeb is the working name for a general web request privacy toolkit. The request
-engine is the product foundation: API CRUD, web fetching, private application
-egress and AI/research workflows use the same method, destination, headers,
-body and response interface. Supporting the breadth of web requests is the
-direction, rather than a claim of universal compatibility today.
+zkWeb's primary goal is to let a cooperating web destination process a request
+without learning its private input. The current prototype combines TFHE-rs
+fully homomorphic encryption with a mandatory zero-knowledge proof of correct
+input encryption. The destination verifies the proof before computing over an
+encrypted selector and returns an encrypted result for local decryption.
 
-The current implementation has a local HTTPS client over an explicit Tor/SOCKS5
-route, alongside the local Sphinx/SURB experiment with a bounded HTTPS worker.
-The local client supports bounded binary bodies. An optional offline verifier
-checks existing TLSNotary presentations; it is separate from both HTTP modes.
-Covered fragmentation, streaming, persistent browser sessions, proof capture
-and application-specific proof binding remain design work. The
-[implementation research](../docs/web-request-research.md) compares existing
-systems and their trust boundaries.
+The implemented function is a read from the public table `[11, 22, 33, 44]` with
+a hidden index in `0..3`. This fixed function is the first complete private
+request, not generic encrypted CRUD or compatibility with unchanged websites.
+Useful private reads and writes require destination logic and state protocols
+designed for encrypted computation. See the
+[private-request guide](../docs/private-requests.md) for commands and trust
+boundaries.
+
+The existing Tor/SOCKS5 HTTPS client, local Sphinx/SURB experiment and offline
+TLSNotary verifier remain separate tools. Transport privacy does not conceal a
+plaintext HTTP payload from the destination, and transcript attestation does
+not make its source execute an encrypted request. The
+[implementation research](../docs/web-request-research.md) compares these roles.
 
 ## Separate responsibilities
 
 | Part | Intended responsibility | Current status |
 | --- | --- | --- |
-| Request interface | Preserve HTTP method, origin/path/query, allowed headers, body, status and response data. | Seven methods and a pinned HTTPS origin; `fetch` preserves bounded binary bytes, while `request` supports small UTF-8 bodies and one request per fixed epoch. |
+| Private computation | Keep private inputs encrypted during destination processing and return an encrypted result. | `private-query` proves encryption of a two-bit selector; `private-serve` verifies it and evaluates a four-record lookup using TFHE-rs. Loopback HTTP only; no proof of correct server evaluation. |
+| Proof admission and profiles | Accept only conformant, verified encrypted inputs under registered keys, parameters and request context. | Offline setup separates client secret from server evaluation material; profile hashes pin configuration/CRS/keys. Expiring one-use challenges bind proofs to a fresh server instance. Honest provisioning/CRS generation is assumed. |
+| General HTTP interface | Preserve HTTP method, origin/path/query, allowed headers, body, status and response data when the destination processes ordinary HTTP. | Seven methods and a pinned HTTPS origin; `fetch` preserves bounded binary bytes, while `request` supports small UTF-8 bodies and one request per fixed epoch. Destinations receive plaintext application inputs. |
 | Transport | Hide client/request linkage under an explicit adversary model, with mode-specific latency and bandwidth tradeoffs. | `fetch` uses an explicit loopback Tor/SOCKS5 route with client-to-origin TLS and no direct fallback; `request` uses scheduled loopback Sphinx links with cover. Neither is an independently evaluated anonymity service operated by this project. |
 | Session and credential controls | Scope credentials, cookies, destinations and retained state to a caller-selected context. | Origin-scoped reusable client with per-client Tor isolation state, explicit headers and no ambient cookie jar or environment proxy; persistent session/daemon APIs remain future work. |
 | Anonymous access or payment | Prove eligibility or spending authority without exposing unnecessary identity. | Inherited zkAPI wallet/proof components exist separately; the HTTP worker has no access-proof or billing integration. |
 | Optional response verification | Authenticate selected web transcript data with a defined verifier and trust model, then support explicit application claims. | Partially implemented: optional `zkweb verify` checks existing TLSNotary alpha.15 presentations offline against caller-pinned notary/server/time policy and returns selected authenticated byte ranges. Capture, HTTP claims and request/challenge binding remain future work. |
-| Applications | Offer browser/tool interfaces, private research and other workflows above the request engine. | CLI `fetch` and `request` modes plus synthetic transport experiments; browser integration and research planning remain future work. |
+| Applications | Offer useful private functions and client interfaces above the relevant protocol. | Private lookup CLI plus separate `fetch`, `request`, verification and transport tools; general encrypted state updates and browser integration remain future work. |
 
-A zero-knowledge eligibility proof does not hide authenticated account identity
-from an API, and a proof about selected response data does not itself anonymize
-the request. Sphinx encryption supplies neither of those proofs. The engine must
-state which property a selected mode provides rather than labeling all web
-traffic as zero knowledge.
+FHE supplies confidentiality for the selector and result. The ZK input proof
+enforces a relation about correct encryption; it supplies neither account
+authorization nor proof of the server's output. Anonymous eligibility and
+payment proofs are different statements. Each mode must state which property
+it actually supplies.
 
-## Intended general request flow
+## Private request protocol
+
+### Setup and pinned context
+
+The isolated Rust workspace `private-request/` produces `zkweb-private`. The Go
+CLI invokes that fixed sibling backend for `private-setup`, `private-serve` and
+`private-query`. Ordinary `make build` and private command help do not need
+TFHE-rs; `make build-private` and `make test-private` build and exercise the
+optional backend. The crate pins TFHE-rs 1.8.2 and its registry checksum, using
+full upstream parameter sets with no toy reduction.
+
+An offline provisioner generates a `ClientKey`, compact public key, evaluation
+`ServerKey` and CRS. The client profile contains the secret decryption key;
+the server profile contains only public/evaluation material. Only that server
+profile should be transferred to a destination operator. A profile hash pins
+the configuration, CRS and registered keys. The provisioner sees the secret
+during setup and must be trusted; the hashes do not prove honest key or CRS
+generation. There is no production setup ceremony.
+
+Both processes on one machine demonstrate protocol messages, not an operating
+system isolation boundary. A common administrator can read client files or
+memory. Separate hosts and a trusted client are required for an actual
+operator boundary. Upstream side-channel limitations remain outside this
+prototype's guarantees.
+
+### Proof relation and acceptance
+
+The public statement consists of the registered compact public key, CRS,
+compact ciphertext and proof metadata. The witness contains the selector
+`index` and encryption randomness. The relation is correct TFHE compact public
+key encryption, including its required bounds, of `index ∈ {0, 1, 2, 3}`. The
+two-bit encrypted type establishes that exact range. The application also
+requires a one-element `FheUint2` list; an empty list or different type is not a
+request for this function.
+
+The HTTP flow uses two public endpoints:
+
+1. `GET /challenge` returns the protocol, pinned profile, server instance,
+   fresh challenge identifier and expiry. The client validates the context.
+2. The client encrypts and proves its selector, binding metadata to the
+   protocol, fixed lookup function, profile, server instance, challenge and
+   expiry. The context uses a domain separator and unambiguous field encoding.
+3. `POST /query` sends only the challenge identifier and base64-encoded proven
+   ciphertext. The server checks the challenge, size limits, safe conformant
+   deserialization, list length/type and ZK proof before expanding the selector
+   or performing FHE evaluation.
+4. The server uses `MatchValues` to select the encrypted `FheUint8` result. It
+   has no `ClientKey` and never decrypts the index or result. Every successful
+   selection uses the same response structure and ciphertext type.
+5. The client checks the response context and ciphertext conformance, decrypts
+   locally and prints the index/value only to its local output.
+
+Challenges expire after 120 seconds, the outstanding challenge store is bounded,
+and every decoded query consumes its recognized challenge before expensive verification,
+including failed proofs. A fresh instance identifier on
+restart prevents proofs for the old process from becoming valid in a new
+store. This constrains replay at the accepting server; it does not establish
+exactly-once execution or prevent a malicious server from returning arbitrary
+or stale ciphertexts. Result conformance is not a proof of correct evaluation.
+
+Only numeric loopback HTTP addresses are enabled. The destination sees the
+endpoint, method, fixed operation, public table, IP, timing, sizes and
+profile/session context. Reused profiles may link sessions. The private fact is
+which table entry was selected. The client sends no callback based on the
+decrypted result; future applications must avoid turning their observable
+reactions into a decryption oracle.
+
+## Separate ordinary HTTP transport flow
 
 1. A client submits a request and explicit context over a local interface. The
    context scopes destinations, credentials, budgets and any retained session
@@ -54,11 +128,10 @@ traffic as zero knowledge.
    objective, minimize questions, restore local context and verify citations; an
    API client may need exact bytes and session continuity instead.
 
-This flow is a design target. The local HTTPS client and bounded loopback request
-exchange below implement its initial request paths. Offline artifact verification
-implements a separate first proof step. The previous headless
-research-daemon concept is an application on top of this engine, not a restriction
-on general request operations.
+This flow describes ordinary HTTP transport and its broader design target.
+The destination processes plaintext application inputs in these modes. It is
+separate from the fixed encrypted lookup above; adding Tor, an eligibility
+proof or a response attestation does not turn it into private computation.
 
 ## Local client-to-origin TLS mode
 
@@ -157,6 +230,9 @@ It has no payment authorization, wallet custody or zkAPI lease integration.
 
 | Decision | Reason and limitation |
 | --- | --- |
+| ZK-proven TFHE compact encryption and FHE lookup | Reuse an existing library for private input processing and mandatory proof admission. The two-bit selector hides one of four choices; this proves neither authorization nor server output correctness. |
+| Offline pinned client/server profiles | Keep the client decryption secret out of destination material and bind proof verification to configured keys/CRS. Honest provisioning and CRS generation are assumed; the demo is not a ceremony or host sandbox. |
+| Fresh instance and expiring one-use challenges | Bind proofs to one server context and constrain request replay. Does not provide general response freshness, exactly-once writes or verifiable evaluation. |
 | Use Katzenpost Sphinx/SURBs | Reuse packet cryptography rather than invent an onion format; does not reuse a complete deployed mixnet or inherit its anonymity analysis. |
 | Independent forward and reverse schedules | A variable or direct response stream would expose job completion patterns. |
 | Fixed cell bodies, random padding | Prevent application body length from directly encoding the task; HTTP/TCP and packet counts remain visible. |
@@ -166,9 +242,9 @@ It has no payment authorization, wallet custody or zkAPI lease integration.
 | Synthetic `demo`/`compare` worker | Exercise the lab without leaking prompts or issuing paid calls; real HTTP work uses the separate opt-in `request` or `fetch` command with its documented route. |
 | Optional pinned TLSNotary verifier | Reuse upstream attestation verification for offline artifacts while keeping Rust proof dependencies out of ordinary Go builds; caller-selected notary trust remains necessary, and no capture or HTTP claim is implied. |
 
-## What an adversary still sees
+## What a transport adversary still sees
 
-The lab operator can inspect every key and node. A network observer can see
+In the transport lab, the operator can inspect every key and node. A network observer can see
 endpoints, connection establishment, the chosen rate, session start/end, loss and
 OS scheduling effects. The worker sees its plaintext task. A research target can
 infer intent from rare facts, document identifiers or repeated questions even
@@ -184,50 +260,59 @@ Long-term intersection and confirmation attacks need evaluation too.
 
 | Stage | Deliverable | Evidence before advancing |
 | --- | --- | --- |
-| 0: local transport | Current headless loopback lab | Fixed sizes, idle traffic in both directions, real SURB replies, replay rejection, queue bounds, no catch-up, cancellation; race tests and captured aggregate demo results. |
-| 1: network experiment | Separate relay processes and independently operated hosts; authenticated links and directory | Test operator compromise, active timing perturbation, drops, flooding, route churn, replay across restart, key rotation and population size. Prefer using the complete Katzenpost/Nym transport stack where possible. |
-| 2: general bounded HTTP protocol | Large/binary request and response framing, expiring reply capabilities, bounded reassembly and explicit completion | Exact-byte HTTP fixtures; malformed/reordered/duplicate fragment tests; resource caps, cancellation, replay and lost epochs. Mutation outcomes remain unknown without a reply; no automatic retry of ambiguous writes. |
-| 3: contexts and useful request alpha | A local request API with scoped credentials, sessions, target capabilities and transport selection | Separate concurrent callers and accounts; prevent cookie/auth cross-context leakage; test CRUD, document fetches, SSRF/DNS policies and redirect policy. Measure cost/latency without claiming all-site compatibility. |
-| 4: extended web semantics | Reviewed streaming, WebSocket/CONNECT and browser integration designs where justified by transport choice | Long-lived cancellation/backpressure tests, bounded buffers, replay and recovery analysis, and mode-specific metadata/timing measurements. Do not apply asynchronous cover claims to interactive modes without evidence. |
-| 5: optional proof adapters | Extend offline TLSNotary verification with proof capture, application claims and request/challenge binding; separately integrate anonymous access/payment where selected | Offline verification already checks upstream cryptography and caller-selected policy. Capture and application claims need complete-message parsing, explicit trust/freshness/replay statements and independent review tests. Anonymous admission remains separate from the generic HTTP path. |
-| 6: release and optional funded integration | Reviewed transport deployment and reproducible packages; compatible zkAPI stack only when that payment adapter is selected | Independent-host adversary evaluation and release recovery tests; for zkAPI funding, ceremony/code/proof pins, exact-release deposit/request/settlement/exit tests and conservative spend caps. No development setup substitution. |
+| 0: complete private read | Current four-record lookup with ZK-verified encrypted input, HTTP acceptance, FHE evaluation and local result decryption | Real cryptographic checks and HTTP round trips for all selectors; reject tampered/wrong-context proofs, empty or wrong-type lists, malformed objects, expired/replayed challenges and incompatible profiles before evaluation. Measure setup/proving/evaluation cost without weakening parameters. |
+| 1: independent operator boundary | Reviewed provisioning, profile/key registration, authenticated remote deployment and client secret handling | Separate-host runs with destination material containing no client secret; explicit CRS/key trust and rotation model, resource/DoS limits, session linkage and metadata measurements. Loopback integration is not this evidence. |
+| 2: useful private reads and result integrity | Larger/private query functions plus a selected integrity design for malicious destinations | Specify the public/private inputs and precise proof relation per function. Evaluate output-correctness proofs or authenticated retrieval against the required trust model; demonstrate detection of wrong or stale results rather than relying on input proof verification. |
+| 3: encrypted state and CRUD | Cooperating-server create/update/delete protocols with encrypted inputs and explicit public leakage | Define state consistency, authorization, access-pattern leakage, concurrency, replay, idempotency, exactly-once limits and recovery. Prove the required input relations and validate state transitions; no automatic retry of ambiguous mutations. |
+| 4: usable private service interfaces | Local client API and selected transport integration for supported encrypted functions | Separate concurrent callers and keys, preserve client secrets, bound resources and cancellation, and assess what IP/timing/session identifiers disclose. Transport anonymity and payment admission require independent evidence. |
+| 5: broader service adaptation | Reusable encrypted functions and integration patterns for additional cooperating backends | Establish per-function semantics, computation cost and privacy/correctness guarantees. Ordinary unmodified websites remain outside this capability unless their protocol changes. |
+| 6: reviewed release | Reproducible optional backend packages and reviewed cryptographic, setup and deployment boundaries | Independent review, dependency/parameter pins, side-channel assessment and lifecycle/recovery tests. Compatible zkAPI funding is separate and requires its own ceremony/deployment/proof compatibility; no development setup substitution. |
 
-Stage 1 now has a process-isolated, synthetic 16-client comparison with clean,
+The current private-read implementation is intentionally small enough to state
+its exact relation and leakage. `make test-private` is the acceptance entry
+point for its cryptography and real HTTP path. The protocol is experimental;
+no production security review, remote deployment or benchmark is implied by
+the code being present.
+
+### Separate transport and verification work
+
+The existing process-isolated, synthetic 16-client comparison covers clean,
 provider-delay, worker-ingress-loss and client-disconnect scenarios. It measures
-two timestamp heuristics, completion, completed-job latency and TCP stream bytes.
-It has no independent hosts, authenticated directory/links or comprehensive active
-attacker. The complete Katzenpost reference remains blocked by its private-key
-file requirements; see [assessment](REFERENCE.md). The first part of stage 1 is
-implemented; independent-host evaluation remains open. `fetch` now supplies a
-TLS-preserving proxy route, bounded binary bodies and per-client Tor isolation,
-which are initial pieces of stages 2 and 3. Covered fragmentation, persistent
-session/daemon APIs and release work remain open. Stage 5 has an initial offline
-TLSNotary verification adapter with cryptographic tamper and policy tests;
-proof capture, application claims, request/challenge binding and anonymous
-admission remain open.
+two timestamp heuristics, completion, completed-job latency and TCP stream bytes,
+not independent operators or a comprehensive active attacker. The complete
+Katzenpost reference remains blocked by its private-key file requirements; see
+[assessment](REFERENCE.md). Independent-host evaluation, authenticated links and
+directory, key rotation and restart-safe replay remain transport work.
+
+`fetch` supplies a TLS-preserving proxy route, bounded binary bodies and
+per-client Tor isolation. Covered fragmentation, persistent session/daemon
+APIs, streaming and WebSocket/browser integration require separate designs.
+The offline TLSNotary adapter checks existing artifacts; capture, HTTP claims,
+request binding and anonymous admission remain separate. None of these
+milestones substitutes for destination-side encrypted computation.
 
 The [first process comparison](evidence/process-comparison/report.md) found an
-unfinished clean job and queued cover/work at epoch end. The immediate transport
-priority is to evaluate fixed capacity headroom and return-cover routing, then a
+unfinished clean job and queued cover/work at epoch end. The remaining transport
+work includes evaluating fixed capacity headroom and return-cover routing, then a
 bounded recovery protocol that uses predetermined slots. Low scores for two
 timestamp heuristics do not justify bypassing that work or the complete transport
 reference assessment.
 
-There is no production anonymity or funded-service release
+There is no production private-computation, anonymity or funded-service release
 claim in this branch. The privacy features are independent from changing a vault
 address: existing notes always require their original compatible stack.
 
 ## Positioning
 
-The product opportunity is a usable request engine with explicit transport,
-credential and verification boundaries across ordinary web workloads. Research
-and AI applications can add local intent minimization and task-specific content
-controls above it. Such transformations must preserve their task's semantics;
-a universal rewrite is unsuitable for arbitrary HTTP bodies.
+The product direction is useful encrypted requests processed by cooperating
+destinations. General web scope means extending the set of supported private
+functions and backend integrations, with explicit statements about what stays
+public. It does not imply that a universal client can make an unchanged website
+compute on inputs that website cannot read.
 
-Mixnets, private proxies, anonymous credentials, web-data proofs and redaction
-are established prior art. Reuse reviewed implementations where their trust
-model fits, evaluate complete requests against explicit attackers, and do not
-market the composition as a new cryptographic guarantee. The broader scope
-does not change legacy vault compatibility: existing notes require their
-original protocol, deployment and proving artifacts.
+FHE, PIR, MPC, ZK proofs, mixnets and anonymous credentials are established
+techniques with different guarantees. Reuse existing implementations and assess
+the complete protocol against its stated attacker. Existing transport and
+verification tools remain useful on their own terms. The scope change does not
+alter legacy vault compatibility: existing notes require their original
+protocol, deployment and proving artifacts.

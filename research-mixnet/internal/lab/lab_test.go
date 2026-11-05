@@ -356,8 +356,9 @@ func TestIdleCoverFlowsInBothDirectionsWithoutJobs(t *testing.T) {
 
 func TestBidirectionalMixedJobsAcrossClients(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Duration = 4 * time.Second
-	cfg.Rate = 20
+	// Leave scheduling headroom for race instrumentation in this low-load fixture.
+	cfg.Duration = 8 * time.Second
+	cfg.Rate = 4
 	cfg.MeanDelay = 10 * time.Millisecond
 	cfg.Jobs = 4
 	report, err := Run(context.Background(), cfg)

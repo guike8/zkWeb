@@ -1,4 +1,4 @@
-# zkWeb: general private and verifiable web requests
+# zkWeb: destination-private requests and encrypted computation
 
 Research date: **2026-11-05**. zkWeb is the working product name for this fork.
 This brief compares original specifications, project documentation and source
@@ -7,26 +7,30 @@ an exhaustive survey. Research used OpenCLI searches and original-page reads.
 
 ## Product decision
 
-Broaden the product from an AI/research API wrapper to a **general web request
-privacy toolkit**. API CRUD, document fetching, application egress and agent
-tools share a request engine. AI inference and private research are applications
-above that engine.
+The clarified goal is to **hide request inputs from the destination that
+processes them**. This requires encrypted computation on a cooperating backend,
+not merely routing the request anonymously or proving facts about its response.
+The first implementation combines fully homomorphic encryption (FHE) with a
+mandatory ZK proof of valid encrypted input. API CRUD, document fetching and
+agent tools remain longer-term applications of this direction.
 
 The compatibility goal is broad HTTP(S) support: methods, destinations, paths,
 queries, explicit headers, exact request/response bytes, session contexts and,
 where the selected transport permits it, streams and WebSockets. This is a goal,
 not a claim that the current prototype supports all websites or web protocols.
 
-Use the product description **private and verifiable web requests**. Describe
-which privacy and verification properties each mode actually provides. An
-ordinary destination still receives the request content and credentials needed
-to serve it; these technologies do not turn arbitrary existing websites into
-servers that execute hidden requests.
+An unchanged HTTP server cannot execute arbitrary hidden paths, credentials and
+bodies using ZK alone. A proof can establish a statement about a secret input;
+FHE or MPC supplies the ability to compute without revealing that input. Our
+chosen FHE implementation evaluates a fixed function over encrypted inputs.
+Its input proof does not prove that a malicious server returned the right result.
+[TFHE encrypted computation and ZK input proofs](https://github.com/zama-ai/tfhe-rs/blob/e8f3926bb53d7eea95e8a7f581f60aae1c7aba16/tfhe/docs/fhe-computation/advanced-features/zk-pok.md).
 
-## Three separate properties
+## Separate properties
 
 | Property | Mechanism to evaluate | Boundary |
 | --- | --- | --- |
+| Hide selected inputs from the computing destination | FHE or MPC with a cooperating backend; ZK can enforce valid input and policy | The public function, endpoint and traffic metadata remain visible. Existing websites need backend changes. |
 | Hide network linkage between a client and request | Tor, a deployed mixnet, or an appropriately separated oblivious relay/gateway | Does not remove identifiers in accounts, cookies, headers, bodies or request timing. |
 | Prove permission, membership or spending authority without unnecessary identity disclosure | Anonymous credentials, Privacy Pass, or a compatible zkAPI payment adapter | The admitting service must support the chosen protocol. It does not replace arbitrary website logins. |
 | Prove selected facts about authenticated web data | TLSNotary, Reclaim, zkPass or a related zkTLS/notary construction | Has a specific prover/verifier/notary trust model and disclosure statement. It does not itself anonymize transport. |
@@ -41,7 +45,9 @@ selective transcript verification rather than an anonymous web proxy.
 
 | Implementation | What is available | Fit for zkWeb and material limits |
 | --- | --- | --- |
-| **Nym** | Developer documentation updated November 3, 2026 lists native TCP/UDP APIs, SOCKS5, Go/C FFI, browser `mix-fetch`, `mix-websocket` and DNS support. The network separately uses anonymous `zk-nym` credentials for bandwidth. | Closest existing feature set to the proposed transport-plus-anonymous-access direction. Evaluate its SDK or SOCKS integration rather than build another relay network. Ordinary account identity remains visible to the destination. [SDK matrix](https://nym.com/docs/developers), [network architecture](https://nym.com/docs/network). |
+| **TFHE-rs 1.8.2** | Rust FHE integer operations, compact public-key encryption and ZK proofs of correct compact encryption; the implementation pins version 1.8.2. | Selected for the first destination-private request backend: one encrypted two-bit selector with a mandatory proof, four-record encrypted lookup and local decryption. This is a cooperating fixed-function service, not arbitrary encrypted HTTP execution or a proof of output correctness. [Pinned release](https://github.com/zama-ai/tfhe-rs/releases/tag/tfhe-rs-1.8.2), [ZK input proof API](https://github.com/zama-ai/tfhe-rs/blob/e8f3926bb53d7eea95e8a7f581f60aae1c7aba16/tfhe/docs/fhe-computation/advanced-features/zk-pok.md). |
+| **SimplePIR / DoublePIR, Blyss, authenticated PIR** | Implementations and research for private record retrieval, with authenticated variants addressing response integrity. | Relevant for private reads and scaling the initial lookup. Private retrieval alone does not supply this prototype's ZK input proof or general encrypted writes. [SimplePIR](https://github.com/ahenzinger/simplepir), [Blyss SDK](https://github.com/blyssprivacy/sdk), [authenticated PIR](https://people.eecs.berkeley.edu/~henrycg/pubs/authpir/). |
+| **Nym** | Developer documentation updated November 3, 2026 lists native TCP/UDP APIs, SOCKS5, Go/C FFI, browser `mix-fetch`, `mix-websocket` and DNS support. The network separately uses anonymous `zk-nym` credentials for bandwidth. | Optional network privacy layer. It does not hide request contents from the computing destination. Evaluate its maintained SDK or SOCKS integration for network linkage protection. [SDK matrix](https://nym.com/docs/developers), [network architecture](https://nym.com/docs/network). |
 | **Tor / Arti** | The official FAQ, with a January 2026 readiness statement, supports using Arti as a proxy or embedded Rust client. Client anticensorship and onion-service support are documented; relay operation is not supported by Arti. | Practical initial candidate for general HTTPS TCP traffic with TLS terminating at the client and destination. This is onion routing, not a ZK proof or a continuously covered mixnet. [Arti FAQ](https://arti.torproject.org/FAQs/). |
 | **Katzenpost** | Full mixnet daemon/server/directory software and Go/Rust/Python thin-client integration, beyond the Sphinx packet primitive. | Strong asynchronous-transport research candidate. Documentation does not establish a universal browser/HTTP proxy. Using its Sphinx library locally does not inherit the deployed system's operational guarantees. [Integration documentation](https://katzenpost.network/docs/). |
 | **Oblivious HTTP / Cloudflare** | OHTTP is standardized in RFC 9458. Cloudflare's October 2, 2026 managed gateway announcement describes a closed beta, including chunked OHTTP support, restricted to the customer's zone/subdomains. | Optional route for configured cooperating APIs. Separate relay/gateway operators split source-IP and plaintext visibility. The gateway decrypts the request; this is not client-to-arbitrary-origin TLS or ZK. The managed gateway is not a general Internet forward proxy. [RFC 9458](https://www.rfc-editor.org/rfc/rfc9458), [current gateway announcement](https://blog.cloudflare.com/announcing-cloudflare-ohttp-gateway/). |
@@ -77,42 +83,48 @@ checked for the exact library adopted.
 The following is our engineering inference from these sources, not a measured
 result or a claim that any one dependency has been independently audited here.
 
-1. **Keep HTTP semantics in a general local client.** Define a byte-preserving
+1. **Implement destination-private functions first.** A client encrypts its
+   selector and proves valid input under a pinned public profile and fresh server
+   challenge. The server verifies before homomorphic evaluation; only the client
+   holds the decryption key. Extend the fixed lookup through explicit encrypted
+   operation schemas rather than claiming arbitrary HTTP compatibility.
+2. **Keep HTTP semantics in a general local client.** Define a byte-preserving
    request interface and explicit context for origin permissions, credentials,
    cookies, budgets, deadlines and response limits. Applications must choose
    their state scope; do not infer it from chat history or rewrite arbitrary
    bodies as prose.
-2. **Separate the network stream from HTTP execution.** For a general transport
+3. **Separate the network stream from HTTP execution.** For a general transport
    mode, prefer a stream route that lets TLS terminate locally and at the real
    destination. This avoids giving an application-layer worker the request's
    plaintext credentials. Prototype Tor/Arti first and evaluate Nym's maintained
    native/SOCKS interfaces for traffic that can tolerate mixnet costs. Verify the
    exact TLS termination and DNS behavior of each chosen integration.
-3. **Keep delegated HTTPS work explicit.** The current worker mode is useful for
+4. **Keep delegated HTTPS work explicit.** The current worker mode is useful for
    bounded asynchronous tasks, but the worker receives the HTTP request and
    credentials. Treat OHTTP as another specifically configured gateway mode,
    with documented gateway visibility and non-collusion assumptions.
-4. **Make anonymous authorization an independent adapter.** Compare Privacy Pass
+5. **Make anonymous authorization an independent adapter.** Compare Privacy Pass
    gateway tokens with Nym bandwidth credentials and inherited zkAPI funding.
    Define the actual statement, audience, spend/replay protection and metadata
    leakage. Supporting one does not imply support for the others.
-5. **Make response proofs opt-in.** Evaluate TLSN and Reclaim against the same
+6. **Make response proofs opt-in.** Evaluate TLSN and Reclaim against the same
    fixtures before choosing a dependency. Bind the disclosed fact to the origin,
    request/context, freshness and verifier's intended statement. Proving a
    response predicate is not proof that an arbitrary side effect executed
    exactly once.
-6. **Publish capabilities by mode.** Report supported protocols and body limits,
+7. **Publish capabilities by mode.** Report supported protocols and body limits,
    TLS endpoints, parties seeing credentials, timing assumptions, proof backend
    and disclosed fields. Use an explicit unsupported result instead of silently
    bypassing a selected privacy route.
 
 ## Where this repository stands
 
-Implementation follow-through on 2026-11-05 provides two HTTP modes and a
-separate optional verifier:
+Implementation follow-through on 2026-11-05 adds a cooperating encrypted-query
+backend alongside the existing HTTP transports and optional response verifier:
 
 | Mode | Implemented behavior | Boundary |
 | --- | --- | --- |
+| `zkweb private-setup`, `private-serve`, `private-query` | TFHE-rs encrypted selector, mandatory context-bound input proof, server-side homomorphic lookup and client-only decryption. Client and server profiles are separated. | Four public records, one private selector in 0–3, loopback HTTP prototype, trusted offline setup. No arbitrary hidden HTTP/CRUD, network anonymity or proof of correct server output. See the [private request guide](private-requests.md). |
 | `zkweb fetch` | Local HTTP/1.1 over an explicit Tor/SOCKS5 TCP route, client-to-origin TLS, remote destination DNS, exact binary bodies, repeated headers and an origin-scoped reusable client. | Requires an already-running trusted loopback proxy and its resolved-address policy. Bodies default to 1 MiB, configurable up to 16 MiB. No cover schedule or ZK proof is attached to this mode. |
 | `zkweb request` | Seven methods and bounded UTF-8 requests through scheduled local Sphinx/SURB links to a direct HTTPS worker. | Worker receives plaintext requests and credentials. Frames carry at most 4,090 bytes of application data including the request's reply envelope; all mix nodes remain on one machine. |
 | `zkweb verify` | Offline verification of TLSNotary alpha.15 JSON presentations against an external notary key, expected server name and explicit time window; optionally exports authenticated transcript ranges. | Requires a separately built pinned Rust backend. No proof capture, fetch binding, HTTP statement parser or network anonymity claim is added. |
@@ -142,7 +154,7 @@ statement as a TLSN presentation.
 [Signature checker](https://github.com/reclaimprotocol/attestor-core/blob/8f7804e553900dff57c57e9d9394773d884f68b0/src/utils/claims.ts),
 [claim handler](https://github.com/reclaimprotocol/attestor-core/blob/8f7804e553900dff57c57e9d9394773d884f68b0/src/server/handlers/claimTunnel.ts).
 
-Proof capture/generation, automatic request/fetch binding, anonymous HTTP
+Response-proof capture/generation, automatic request/fetch binding, anonymous HTTP
 access/payment, a persistent session API, HTTP/2 or HTTP/3, WebSockets and
 browser-wide interception remain open. Covered-mode binary fragmentation is
 also separate from the local route's bounded binary transfers. The inherited
@@ -162,12 +174,11 @@ deployment pins.
 
 | Priority | Deliverable | Evidence required |
 | --- | --- | --- |
-| 1 | Extend the implemented origin-scoped client and Tor/SOCKS route into additional backends and a local context API | Existing exact-byte, certificate, header, DNS, limit and no-fallback tests cover the first route. Add independent concurrent-context and daemon-boundary evidence as that API is implemented. |
-| 2 | Extend bounded binary transfers to covered mode and streaming interfaces | Binary bodies now work in the local TLS route. Covered mode still needs fragment ordering/replay/resource limits; future streaming needs backpressure/cancellation bounds. |
-| 3 | Compare a deployed mixnet integration with the existing lab and a Tor route | Independent-host tests, measured completion/latency/bandwidth, fault behavior and explicit adversary assumptions. Do not equate synthetic timing scores with anonymity. |
-| 4 | Optional anonymous admission/credits | Pin one protocol; test issuance/redemption, replay and linkability boundaries; retain existing wallet release gates for any funded adapter. |
-| 5 | Extend initial offline TLSN verification into capture and explicit application statements | The pinned backend has actual signature/identity/commitment and tamper tests. Capture must define route, disclosures, challenge/fetch binding, notary trust and mutation recovery without refetching writes. |
-| 6 | Streaming, WebSockets and browser integration where feasible | Protocol-specific conformance, session isolation and long-lived-flow measurements. Declare unsupported combinations and different timing guarantees. |
+| 1 | Extend encrypted computation beyond the four-record lookup | Define each encrypted input/output and ZK statement; measure setup, proof, verification, evaluation and wire costs with real parameters. |
+| 2 | Authenticate encrypted computation results | Define the malicious-server model and prove or otherwise authenticate the selected function and returned result. An input proof alone cannot do this. |
+| 3 | Add encrypted state and CRUD on a cooperating service | Specify access-pattern leakage, authorization, state commitments, concurrency, replay and mutation recovery. Ordinary plaintext CRUD is not evidence of hidden writes. |
+| 4 | Add deployment and network privacy around encrypted requests | Independent client/server hosts, authenticated profile distribution, quotas, bounded resource use and explicit transport guarantees. |
+| 5 | Extend existing transports, anonymous admission and response attestations as distinct adapters | Preserve byte, TLS, replay, context and verifier checks; document which adapter protects which party's information. |
 
 The existing mutation rule remains: a lost response can leave the remote side
 effect committed. ZK provenance does not fix this. Preserve `delivery_unknown`
