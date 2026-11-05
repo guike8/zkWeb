@@ -26,6 +26,8 @@ func run(ctx context.Context, args []string) error {
 			return lab.RunPeer(ctx, os.Stdin, os.Stdout)
 		case "compare":
 			return compare(ctx, args[1:])
+		case "request":
+			return request(ctx, args[1:], os.Stdin, os.Stdout)
 		case "reference-check":
 			if len(args) != 1 {
 				return errors.New("reference-check accepts no arguments")
@@ -34,7 +36,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	if len(args) == 0 || args[0] != "demo" {
-		return errors.New("usage: research-mixnet demo | compare | reference-check; headless synthetic experiments only")
+		return errors.New("usage: research-mixnet demo | compare | request | reference-check")
 	}
 	cfg := lab.DefaultConfig()
 	f := flag.NewFlagSet("demo", flag.ContinueOnError)

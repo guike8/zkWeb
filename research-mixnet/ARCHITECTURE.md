@@ -23,7 +23,37 @@ asynchronous research job, not a remotely streamed keystroke-by-keystroke chat.
    Public sources must support reported claims. A rewrite must not invent facts.
 
 That complete flow is a design target. Encrypted transport, synthetic worker
-plumbing and a separate-process comparison harness have been implemented.
+plumbing and a separate-process comparison harness have been implemented. A
+separate opt-in `request` command now exercises bounded CRUD HTTP work over the
+local transport; it is an adapter experiment, not the research alpha.
+
+## Opt-in HTTP adapter experiment
+
+`request` admits one strict JSON envelope containing an HTTP method, relative
+path, optional headers and a UTF-8 body string. A command-line target fixes the
+allowed public HTTPS origin before the epoch begins. Inputs are validated before
+transport starts and revalidated at the worker. The encrypted forward envelope
+includes a one-use SURB, and the actual serialized request must fit one cell.
+
+The existing fixed schedules carry work in place of cover through three local
+forward mixes to the worker. Bounded worker execution makes one HTTPS request
+to the configured origin. A bounded UTF-8 status/header/body envelope returns
+through three local reverse mixes to the client using its SURB. The epoch
+continues after completion; the CLI prints the response only when it ends.
+`demo` and `compare` continue to execute synthetic work without Internet egress.
+
+The HTTP adapter rejects local/private targets, URL credentials and redirects.
+It does not inherit environment proxies, cookies or caller process credentials.
+Request credentials are accepted only as explicit envelope headers and are
+visible to the worker and target. Target behavior can still expose intent or
+account identity. The worker's HTTPS connection is direct, and all mix nodes
+remain on one machine under one operator.
+
+No layer automatically retries a request. Losing a reply after a mutation leaves
+its outcome unknown, so epoch exhaustion reports `delivery_unknown`; it does
+not imply that the operation failed. Large/binary responses, fragmentation,
+streaming, application-level idempotency and recovery are outside this adapter.
+It has no payment authorization, wallet custody or zkAPI lease integration.
 
 ## Decisions made for the prototype
 
@@ -35,7 +65,7 @@ plumbing and a separate-process comparison harness have been implemented.
 | Fixed epoch, bounded pools, no catch-up | Jobs do not create extra scheduled slots; overload reduces availability instead of increasing rate. |
 | Random eligible selection with residence delay | Introduces reordering; the static single-host comparison cannot establish anonymity. |
 | Replay cache without eviction in a key epoch | Reject repeated packets; capacity exhaustion stops admissions. Production needs authenticated epochs, freshness and restart-safe replay handling. |
-| Local-only synthetic worker | Exercise the transport without leaking prompts, issuing paid calls or importing a vulnerable wallet release. |
+| Synthetic `demo`/`compare` worker | Exercise the transport without leaking prompts, issuing paid calls or importing a vulnerable wallet release; real HTTP work requires the separate opt-in `request` command. |
 
 ## What an adversary still sees
 

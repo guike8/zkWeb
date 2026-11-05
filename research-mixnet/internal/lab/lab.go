@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Package lab runs only a disposable loopback experiment. It has no wallet,
-// provider credentials, arbitrary fetcher, persistent keys or public listener.
+// Package lab runs a disposable loopback transport experiment. Demo jobs are
+// synthetic; Exchange allows an explicit bounded worker without adding wallet
+// integration, persistent keys or public transport listeners.
 package lab
 
 import (
@@ -57,12 +58,13 @@ type pendingReply struct {
 	started time.Time
 }
 type client struct {
-	node      *node
-	source    *link
-	download  *link
-	mu        sync.Mutex
-	pending   map[replyID]pendingReply
-	latencies []int64
+	node       *node
+	source     *link
+	download   *link
+	mu         sync.Mutex
+	pending    map[replyID]pendingReply
+	latencies  []int64
+	onResponse func([]byte)
 }
 
 func (c *client) receive(cell terminalCell) {
@@ -75,17 +77,21 @@ func (c *client) receive(cell terminalCell) {
 			if !exists {
 				return
 			}
+			defer clear(pending.keys)
 			plain, err := c.node.codec.s.DecryptSURBPayload(cell.payload, pending.keys)
 			if err != nil {
 				return
 			}
 			kind, data, err := decodeFrame(plain)
-			if err != nil || kind != responseKind || !bytes.Equal(data, []byte("synthetic research result")) {
+			if err != nil || kind != responseKind || (c.onResponse == nil && !bytes.Equal(data, []byte("synthetic research result"))) {
 				return
 			}
 			c.mu.Lock()
 			c.latencies = append(c.latencies, time.Since(pending.started).Milliseconds())
 			c.mu.Unlock()
+			if c.onResponse != nil {
+				c.onResponse(append([]byte(nil), data...))
+			}
 			return
 		}
 	}
@@ -93,11 +99,11 @@ func (c *client) receive(cell terminalCell) {
 }
 
 type researchRequest struct {
-	Text  string `json:"text"`
-	Reply []byte `json:"reply"` // Opaque one-use Sphinx route, never a callback URL.
+	Payload []byte `json:"payload"`
+	Reply   []byte `json:"reply"` // Opaque one-use Sphinx route, never a callback URL.
 }
 
-func (c *client) submit(code *codec, forward, reverse []*node, text string) error {
+func (c *client) submit(code *codec, forward, reverse []*node, payload []byte) error {
 	var id replyID
 	if _, err := rand.Read(id[:]); err != nil {
 		return err
@@ -107,7 +113,13 @@ func (c *client) submit(code *codec, forward, reverse []*node, text string) erro
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(researchRequest{Text: text, Reply: surb})
+	retained := false
+	defer func() {
+		if !retained {
+			clear(keys)
+		}
+	}()
+	raw, err := json.Marshal(researchRequest{Payload: payload, Reply: surb})
 	if err != nil {
 		return err
 	}
@@ -127,13 +139,21 @@ func (c *client) submit(code *codec, forward, reverse []*node, text string) erro
 		}
 		return errors.New("client queue full")
 	}
+	retained = true
 	return nil
 }
 
 // Run exercises real HTTP loopback links and unmodified Sphinx/SURB operations.
 // Completion does not stop cover. Only the fixed epoch or cancellation stops it.
 func Run(parent context.Context, cfg Config) (Report, error) {
+	return run(parent, cfg, nil)
+}
+
+func run(parent context.Context, cfg Config, exchange *exchangeJob) (Report, error) {
 	if err := cfg.validate(); err != nil {
+		return Report{}, err
+	}
+	if err := parent.Err(); err != nil {
 		return Report{}, err
 	}
 	code := newCodec()
@@ -193,6 +213,9 @@ func Run(parent context.Context, cfg Config) (Report, error) {
 			return Report{}, err
 		}
 		clients[i] = &client{node: n, pending: make(map[replyID]pendingReply)}
+		if exchange != nil {
+			clients[i].onResponse = exchange.receive
+		}
 		n.onTerminal = clients[i].receive
 	}
 	clientPeriod := time.Second / time.Duration(cfg.Rate)
@@ -249,6 +272,29 @@ func Run(parent context.Context, cfg Config) (Report, error) {
 		}
 		c.download = l
 	}
+	workerQueue := make(chan researchRequest, 1)
+	if exchange != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case job := <-workerQueue:
+					if ctx.Err() != nil {
+						return
+					}
+					response := exchange.handle(ctx, job.Payload)
+					if ctx.Err() != nil {
+						return
+					}
+					queueReply(code, reverse[0].id, workerOut, job.Reply, response)
+				}
+			}
+		}()
+	}
+	dispatched := false // Exchange admits exactly one configured operation per epoch.
 	exit.onTerminal = func(cell terminalCell) {
 		kind, raw, err := decodeFrame(cell.payload)
 		if err != nil || kind != requestKind {
@@ -257,19 +303,35 @@ func Run(parent context.Context, cfg Config) (Report, error) {
 		var job researchRequest
 		d := json.NewDecoder(bytes.NewReader(raw))
 		d.DisallowUnknownFields()
-		if d.Decode(&job) != nil || d.Decode(new(any)) != io.EOF || len(job.Text) > 1024 || len(job.Text) == 0 || len(job.Reply) != code.s.Geometry().SURBLength {
+		if d.Decode(&job) != nil || d.Decode(new(any)) != io.EOF || len(job.Payload) == 0 || len(job.Reply) != code.s.Geometry().SURBLength {
 			return
 		}
-		// Synthetic worker only. No external inference, search, payments or tools.
-		frame, err := encodeFrame(responseKind, []byte("synthetic research result"))
-		if err != nil {
+		if exchange != nil {
+			if dispatched || !bytes.Equal(job.Payload, exchange.payload) {
+				return
+			}
+			// Reject invalid return capabilities before the worker can perform a
+			// mutation. This probe is never sent; it does not consume the SURB.
+			probe, err := encodeFrame(responseKind, nil)
+			if err != nil {
+				return
+			}
+			_, first, err := code.s.NewPacketFromSURB(job.Reply, probe)
+			if err != nil || first == nil || *first != reverse[0].id {
+				return
+			}
+			select {
+			case workerQueue <- job:
+				dispatched = true
+			default:
+			}
 			return
 		}
-		packet, first, err := code.s.NewPacketFromSURB(job.Reply, frame)
-		if err != nil || *first != reverse[0].id {
+		// The demo keeps its synthetic-only worker.
+		if len(job.Payload) > 1024 {
 			return
 		}
-		workerOut.enqueue(packet, time.Now())
+		queueReply(code, reverse[0].id, workerOut, job.Reply, []byte("synthetic research result"))
 	}
 	for _, n := range nodes {
 		n.start(ctx, &wg)
@@ -296,7 +358,11 @@ func Run(parent context.Context, cfg Config) (Report, error) {
 		report.IdleDownloadCover += c.download.snapshot().Cover
 	}
 	for i := 0; i < cfg.Jobs; i++ {
-		if err := clients[i%len(clients)].submit(code, forward, reverse, "Find primary sources about mixnet research transport."); err != nil {
+		payload := []byte("Find primary sources about mixnet research transport.")
+		if exchange != nil {
+			payload = exchange.payload
+		}
+		if err := clients[i%len(clients)].submit(code, forward, reverse, payload); err != nil {
 			return Report{}, err
 		}
 		report.Submitted++

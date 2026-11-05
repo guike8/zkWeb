@@ -4,7 +4,8 @@
 [`research-mixnet/`](research-mixnet/README.md). It includes a local Sphinx/SURB
 transport experiment with continuous scheduled cover in both directions, a
 separate-process timing/fault comparison, tests, an application research brief
-and production milestones. This is a synthetic
+and production milestones. An opt-in `request` command also carries bounded
+HTTP CRUD requests through the local prototype to an HTTPS worker. This is a
 loopback prototype; it does not provide a production anonymity service or change
 the upstream wallet/deployment status described below.
 

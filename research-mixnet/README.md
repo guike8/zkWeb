@@ -7,7 +7,9 @@ The fork starts at `vbuterin/zkapi` commit
 `0fb263b0da04986cfe5c63b12340c1581018ae9b`.
 
 It is a working **loopback transport experiment**, not a production anonymity
-service. It runs headlessly, uses synthetic jobs, and emits aggregate JSON.
+service. It runs headlessly. `demo` and `compare` use synthetic jobs and emit
+aggregate JSON. The separate opt-in `request` command carries a bounded HTTP
+CRUD request over the same local Sphinx/SURB transport to an HTTPS worker.
 
 ## Run
 
@@ -40,13 +42,80 @@ make compare
 ./bin/research-mixnet reference-check
 ```
 
-Build dependencies download over the network. The experiment itself binds only
-literal `127.0.0.1` addresses and contacts only those listeners. It accepts no
-real prompts, keys or wallet profiles. It does not launch a browser or GUI.
+Build dependencies download over the network. `demo` and `compare` bind only
+literal `127.0.0.1` addresses and contact only those listeners. They accept no
+real prompts, keys or wallet profiles. No command launches a browser or GUI.
 Ctrl+C cancels the run and joins workers and peer subprocesses. The `demo` command
 returns a nonzero status for incomplete jobs. The `compare` command records
 incomplete jobs as measurements, since loss and disconnection are deliberate.
 Dropped observation events invalidate that trial's attack scores.
+
+## Bounded HTTP CRUD requests
+
+`request` supports `GET`, `POST`, `PUT`, `PATCH` and `DELETE` against one explicitly
+selected public HTTPS origin, plus `HEAD` and `OPTIONS`. It sends the request
+through the local forward mixes, executes it at the worker, and returns the result through the reverse mixes
+using a single-use SURB. The worker makes the HTTPS connection directly. All mix
+links still run on this machine; this does not provide a production anonymity
+service or zkAPI payment/lease integration.
+
+Pass an origin without a path or trailing slash, query, fragment or URL
+credentials. The JSON input supplies a relative path, optional headers and a
+UTF-8 body string. Inputs reject unknown fields and additional JSON values.
+Paths may include a query string. Explicit `Authorization`, `Cookie`, content
+type and custom headers are accepted; `Host`, `Content-Length` and hop-by-hop or
+proxy-control headers are reserved. Header values cannot contain line breaks.
+Use stdin or a protected input file for credentials; keep them out of command
+arguments. The configured origin is the only allowed target. Redirects are not
+followed, and private/local destinations are refused.
+
+```sh
+# Create. Replace the origin and path with an API you control.
+printf '%s\n' '{"method":"POST","path":"/items","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"first\"}"}' |
+  ./bin/research-mixnet request --target https://api.example.com --input -
+
+# Read.
+printf '%s\n' '{"method":"GET","path":"/items/1"}' |
+  ./bin/research-mixnet request --target https://api.example.com --input -
+
+# Replace.
+printf '%s\n' '{"method":"PUT","path":"/items/1","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"replacement\"}"}' |
+  ./bin/research-mixnet request --target https://api.example.com --input -
+
+# Update selected fields.
+printf '%s\n' '{"method":"PATCH","path":"/items/1","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"updated\"}"}' |
+  ./bin/research-mixnet request --target https://api.example.com --input -
+
+# Delete.
+printf '%s\n' '{"method":"DELETE","path":"/items/1"}' |
+  ./bin/research-mixnet request --target https://api.example.com --input -
+
+# Read an envelope from a protected file and select the schedule in advance.
+./bin/research-mixnet request --target https://api.example.com \
+  --input request.json --rate 8 --duration 12s --mean-delay 50ms
+```
+
+The default fixed epoch is 12 seconds, with one client and one request. Cover
+continues until the epoch ends, even if the API response arrives sooner. Only
+then is the response JSON written to stdout. Its fields are `status`, selected
+response `headers`, UTF-8 `body`, and an `error` when the worker could not return
+a complete API response. An upstream HTTP status of 400 or greater and worker
+errors make the command exit nonzero while preserving the response on stdout.
+The command does not persist inputs or responses; shell redirection can save
+them if desired.
+
+Requests and replies must each fit one padded cell: 4,090 bytes of application
+frame data. A request also carries the SURB and JSON/base64 overhead, so its
+usable input budget is smaller. Oversized envelopes are rejected before egress;
+large or non-UTF-8 responses return a bounded error. There is no fragmentation,
+binary transfer or streaming. Automatic retries are disabled. If the epoch ends
+without a verified reply, `delivery_unknown` means the operation may already
+have committed. Check the API's state before deciding whether to submit again.
+The worker's HTTP timeout is five seconds, further bounded by the epoch.
+
+Caller-supplied credentials and bodies are disclosed to the worker and target.
+They do not become anonymous by being inside a Sphinx cell. The operator of this
+single-process lab can inspect every node. Use test data when evaluating it.
 
 ## What runs
 
@@ -138,9 +207,10 @@ This is not a cap on TCP wire bytes and not a provider-cost estimate.
 The demo uses one process; the comparison uses separate address spaces under one
 OS user on one machine. Those processes are not a sandbox or independent operators.
 This demonstrates protocol plumbing, **not an anonymity set**, and does not
-defeat a colluding provider and guard. There is no directory/PKI, remote link
-authentication, packet-expiry protocol, persistent replay store, SURB replenishment,
-delivery/retry protocol, real inference, local LLM rewriter or zkAPI integration.
+defeat a colluding provider and guard. The opt-in HTTP worker adds bounded CRUD
+egress, but no directory/PKI, remote link authentication, packet-expiry protocol,
+persistent replay store, SURB replenishment, delivery/retry protocol, real
+inference, local LLM rewriter or zkAPI integration.
 Payloads are bounded to one cell. Long answers and source documents need a
 reviewed fragmentation/reassembly protocol with independent response scheduling.
 X25519 here is not post-quantum protection.
