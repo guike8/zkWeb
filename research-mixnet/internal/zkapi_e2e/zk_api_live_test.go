@@ -161,7 +161,7 @@ func TestZKAPIGatewayLiveExternal(t *testing.T) {
 	}))
 	defer spy.Close()
 	requestArgs := func(member int, method, path string) []string {
-		return []string{"zk-api", "--client-dir", profile.ClientDirs[member], "--url", spy.URL,
+		return []string{"zk-api", "--wire", "legacy", "--client-dir", profile.ClientDirs[member], "--url", spy.URL,
 			"--upstream", liveOrigin, "--method", method, "--path", path,
 			"--header", "Accept: application/vnd.github+json",
 			"--header", "User-Agent: zkWeb-live-test",

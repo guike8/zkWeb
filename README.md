@@ -74,6 +74,11 @@ ZKWEB_LISTENER_URL=http://127.0.0.1:PORT
 an HTTP status and `body_base64`. Every request gets a new proof and challenge;
 mutations are never automatically retried after an uncertain outcome.
 
+The client uses a [compact binary protocol](docs/compact-zk-client-server.md):
+72-byte challenges, 192 raw authorization bytes, and only the operation metadata
+and payload required by the server. CLI output remains JSON. Use `--wire legacy`
+explicitly for an older listener; failed requests never trigger a downgrade.
+
 The [listener guide](docs/zk-listener.md) covers provisioning, the proof
 statement, HTTP behavior and recovery. The implementation lives in
 [research-mixnet/zk-listener](research-mixnet/zk-listener/).
@@ -136,7 +141,7 @@ From `research-mixnet/`:
 
 ```sh
 make test-zk   # Real proofs, record listener and HTTPS API gateway integration
-make test-zk-live # Opt-in real HTTPS APIs: GitHub reads and httpbingo method echoes
+make test-zk-live # Opt-in real HTTPS APIs: GitHub reads and httpbingo methods
 make test     # Go race regression suite
 make vet
 ```

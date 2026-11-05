@@ -53,8 +53,9 @@ client directories; the example uses the first member's `client-0` directory.
   --url http://127.0.0.1:PORT --method DELETE --key note-1
 ```
 
-The request goes to `/records/note-1` using the selected HTTP method. POST
-creates a record, GET reads it, PUT replaces it and DELETE removes it. All group
+The client posts a compact binary envelope to `/b1/r`, carrying the selected
+operation and key. POST creates a record, GET reads it, PUT replaces it and
+DELETE removes it. All group
 members are authorized for all records in this listener. There is no per-user
 record isolation or hidden ownership rule.
 
@@ -104,10 +105,13 @@ Authorization therefore fails if an intermediary changes the method, key/path,
 body or proof.
 
 The proof is 128 compressed bytes. Canonical validated point deserialization and
-exact-length checks apply before verification. The HTTP request carries only
-three authorization headers: `X-ZkWeb-Challenge`, `X-ZkWeb-Tag` and
-`X-ZkWeb-Proof`. Record contents remain ordinary plaintext HTTP data in this
-stage. The [circuit implementation](../research-mixnet/zk-listener/src/crypto.rs)
+exact-length checks apply before verification. The default
+[compact transport](compact-zk-client-server.md) puts the proof, tag and nonce
+into 192 raw bytes in the request body, followed by the operation and its inputs.
+Use `--wire legacy` explicitly for the earlier `/records/KEY` transport with
+`X-ZkWeb-Challenge`, `X-ZkWeb-Tag` and `X-ZkWeb-Proof` headers. There is no automatic
+fallback. Record contents remain plaintext to this loopback service.
+The [circuit implementation](../research-mixnet/zk-listener/src/crypto.rs)
 contains the native and constrained statement.
 
 ## Challenges, persistence and trust
@@ -162,3 +166,10 @@ members, all four methods, binary and empty values, the 64 KiB body boundary,
 restart persistence, replay rejection and independent method/path/body/proof
 tampering. Its checks assert that request contents are visible by design while
 credential fields stay out of the HTTP authorization envelope.
+
+The [compact CLI fixture](../research-mixnet/internal/zkapi_e2e/zk_compact_test.go)
+additionally checks compact record CRUD and gateway requests, raw 1 MiB bodies,
+canonical length decoding, nonce consumption after malformed attempts,
+profile/destination binding, delivery errors and byte comparisons. A direct TCP
+test checks challenge/request connection reuse, the two-request cap and the
+five-second idle bound.

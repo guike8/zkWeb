@@ -127,6 +127,7 @@ func TestZKAPIInvalidInputsNeverLaunch(t *testing.T) {
 	cases := [][]string{
 		{"--client-dir", "/client", "--url", "http://localhost:80", "--upstream", "https://example.com", "--path", "/"},
 		{"--client-dir", "/client", "--url", "http://127.0.0.1:80", "--upstream", "http://example.com", "--path", "/"},
+		append(apiArgs(), "--wire", "automatic"),
 	}
 	for _, option := range [][]string{{"--method", "CONNECT"}, {"--path", "//evil.test/x"}, {"--path", "/x/../admin"}, {"--path", "/%2e%2e/admin"}, {"--path", "/%252e/admin"}, {"--path", "/bad\\path"}, {"--path", "/bad#fragment"}, {"--header", "Authorization: secret"}, {"--header", "Cookie: session=x"}, {"--header", "X-ZkWeb-Proof: copied"}, {"--header", "Host: evil.test"}, {"--header", "Connection: close"}, {"--header", "X-Test: bad\r\nInjected: yes"}, {"--header", "not a header"}, {"--data-file", "/missing"}} {
 		cases = append(cases, append(apiArgs(), option...))

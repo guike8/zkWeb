@@ -196,7 +196,7 @@ func TestZKListenerIntegration(t *testing.T) {
 	request := func(member int, method, key string, status int, expected []byte, input ...string) {
 		t.Helper()
 		started := time.Now()
-		args := []string{"zk-request", "--client-dir", profile.ClientDirs[member], "--url", spy.URL, "--method", method, "--key", key}
+		args := []string{"zk-request", "--wire", "legacy", "--client-dir", profile.ClientDirs[member], "--url", spy.URL, "--method", method, "--key", key}
 		args = append(args, input...)
 		before := count()
 		output, err := run(ctx, cli, args...)
@@ -286,7 +286,7 @@ func TestZKListenerIntegration(t *testing.T) {
 	} {
 		tamper.Store(modification.mode)
 		before := count()
-		args := []string{"zk-request", "--client-dir", profile.ClientDirs[0], "--url", spy.URL, "--method", modification.method, "--key", "alpha"}
+		args := []string{"zk-request", "--wire", "legacy", "--client-dir", profile.ClientDirs[0], "--url", spy.URL, "--method", modification.method, "--key", "alpha"}
 		output, err := run(ctx, cli, append(args, modification.input...)...)
 		if err == nil || len(output) != 0 || count() != before+1 {
 			t.Fatalf("tampered %s was accepted, printed a result, or retried", modification.label)

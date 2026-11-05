@@ -42,10 +42,11 @@ func zkAPICommand(ctx context.Context, args []string, out io.Writer) error {
 func zkAPIWithBackend(ctx context.Context, args []string, out io.Writer, runner zkBackendRunner, executable executableResolver) error {
 	f := flag.NewFlagSet("zk-api", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	var clientDir, endpoint, upstream, method, requestPath, data, dataFile string
+	var clientDir, endpoint, upstream, method, requestPath, data, dataFile, wire string
 	var headers zkHeaderFlags
 	var timeout time.Duration
 	f.StringVar(&clientDir, "client-dir", "", "required private member profile")
+	f.StringVar(&wire, "wire", "compact", "client/server format: compact or explicit legacy; no automatic fallback")
 	f.StringVar(&endpoint, "url", "", "required numeric-loopback HTTP gateway origin")
 	f.StringVar(&upstream, "upstream", "", "required expected HTTPS upstream origin")
 	f.StringVar(&method, "method", "GET", "GET, HEAD, POST, PUT, PATCH, DELETE or OPTIONS")
@@ -67,6 +68,9 @@ func zkAPIWithBackend(ctx context.Context, args []string, out io.Writer, runner 
 	}
 	provided := map[string]bool{}
 	f.Visit(func(option *flag.Flag) { provided[option.Name] = true })
+	if wire != "compact" && wire != "legacy" {
+		return errors.New("zk-api wire must be compact or legacy")
+	}
 	var err error
 	clientDir, err = privateAbsoluteDir(clientDir)
 	if err != nil || f.NArg() != 0 || timeout < time.Second || timeout > 5*time.Minute {
@@ -136,7 +140,7 @@ func zkAPIWithBackend(ctx context.Context, args []string, out io.Writer, runner 
 		return errors.New("cannot close request body file")
 	}
 	encodedHeaders, _ := json.Marshal(boundHeaders)
-	backendArgs := []string{"api-request", "--client-dir", clientDir, "--url", endpoint, "--upstream", upstream, "--method", method, "--path", requestPath, "--headers-base64", base64.StdEncoding.EncodeToString(encodedHeaders), "--body-file", name}
+	backendArgs := []string{"api-request", "--client-dir", clientDir, "--url", endpoint, "--upstream", upstream, "--method", method, "--path", requestPath, "--wire", wire, "--headers-base64", base64.StdEncoding.EncodeToString(encodedHeaders), "--body-file", name}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if runCtx.Err() != nil {

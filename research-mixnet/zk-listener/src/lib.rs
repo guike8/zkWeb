@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Groth16 group authorization for exact, challenge-bound HTTP CRUD requests.
 pub mod client;
+pub mod compact;
 pub mod crypto;
 pub mod forward;
 pub mod profile;

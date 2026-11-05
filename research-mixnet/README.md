@@ -134,6 +134,12 @@ send one request without automatic retries; an interrupted mutation can have an
 unknown outcome. The listener stores records durably and holds an exclusive
 state-file lock.
 
+The default [compact binary transport](../docs/compact-zk-client-server.md) sends
+a 72-byte challenge, 192 raw authorization bytes, and the required operation
+metadata/body. Requests and replies avoid JSON/base64 on the network; local CLI
+results retain their JSON format. Use `--wire legacy` explicitly for older
+listeners. There is no automatic downgrade or request retry.
+
 Trusted offline setup creates 1–16 client credentials, defaulting to four.
 Give the listener only `server/`, containing a verifying key and public manifest;
 keep each `client-N/` credential private. The proving key is public material.

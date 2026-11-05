@@ -38,8 +38,9 @@ test-zk: build build-zk
 	ZKWEB_ZK_CLI="$(abspath bin/zkweb)" go test -race -count=1 -p 1 ./internal/zke2e ./internal/zkapi_e2e -run 'TestZK.*Integration' -timeout 5m
 # Explicit network opt-in: public GitHub reads and disposable httpbingo echoes.
 # Optional ZKWEB_ZK_LIVE_REPORT / ZKWEB_ZK_LIVE_METHODS_REPORT save JSON evidence.
+# ZKWEB_ZK_COMPACT_REPORT saves compact GitHub byte comparisons.
 test-zk-live: build build-zk
-	ZKWEB_ZK_LIVE=1 ZKWEB_ZK_CLI="$(abspath bin/zkweb)" go test -race -count=1 -v ./internal/zkapi_e2e -run '^TestZKAPIGatewayLive(External|Methods)$$' -timeout 5m
+	ZKWEB_ZK_LIVE=1 ZKWEB_ZK_CLI="$(abspath bin/zkweb)" go test -race -count=1 -v ./internal/zkapi_e2e -run '^TestZKAPIGatewayLive(External|Methods|Compact)$$' -timeout 5m
 demo:
 	go run ./cmd/research-mixnet demo
 compare: build

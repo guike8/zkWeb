@@ -1,0 +1,43 @@
+{
+  "binary_sha256": {
+    "zkweb": "1fa486a5381eb58859de50515c0e7885ec098a39898cbe1f79eb8c7f09f0f36b",
+    "zkweb-zk-listener": "f4a0aadd93ee41d8ab8cb0297181b3747514c0b7003263be2b5108cd8cd81d17"
+  },
+  "byte_comparison": {
+    "authorization_raw_bytes": 192,
+    "challenge_compact_bytes": 72,
+    "challenge_legacy_json_bytes": 358,
+    "request_compact_body_bytes": 307,
+    "request_compact_http1_serialized_bytes": 459,
+    "request_legacy_http1_serialized_bytes": 810,
+    "response_compact_body_bytes": 15866,
+    "response_legacy_json_bytes": 21385
+  },
+  "client_http_connections": 2,
+  "completed_utc": "2026-11-05T21:50:46.017975Z",
+  "format": "zkweb-zk-compact-live-evidence-v1",
+  "fresh_profile_members": 2,
+  "limitations": "HTTP/1 sizes are reproducible serialization comparisons, not TCP/TLS packet captures. Client connection counts measure client to test observer; direct TCP reuse and idle limits are checked separately. Request contents remain visible to the gateway and upstream. This is authorization, not a proof of response correctness.",
+  "public_dns_and_webpki_defaults": true,
+  "responses": [
+    {
+      "body_sha256": "a6f2e445a3149dfb30e9cb319a54db2ee27ee489a716d23b01582d6a34e01eef",
+      "elapsed_ms": 495,
+      "github_request_id": "E276:319163:1F38B29:667E9D9:6AECFA35",
+      "method": "GET",
+      "response_body_bytes": 14629,
+      "upstream_status": 200
+    },
+    {
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "elapsed_ms": 407,
+      "github_request_id": "E27B:2952B2:1ECC16B:648A77F:6AECFA35",
+      "method": "HEAD",
+      "response_body_bytes": 0,
+      "upstream_status": 200
+    }
+  ],
+  "started_utc": "2026-11-05T21:50:44.964048Z",
+  "upstream": "https://api.github.com",
+  "wire": "compact-b1"
+}

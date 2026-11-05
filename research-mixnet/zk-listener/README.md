@@ -113,11 +113,18 @@ independent client-generated identities need further application design.
 
 ## HTTP listener and CRUD state
 
-GET `/challenge` supplies a 256-bit random challenge and fresh server-instance
-identifier, the pinned protocol/profile and a 120-second expiry. The cache is
-bounded. The client sends its ordinary request to `/records/KEY`, carrying
-`x-zkweb-challenge`, `x-zkweb-proof` and `x-zkweb-tag` headers. It does not send its
-credential witness.
+The default [compact transport](../../docs/compact-zk-client-server.md) uses
+GET `/b1/c` for a 72-byte challenge: a 256-bit server-instance identifier,
+256-bit nonce and 120-second expiry. The cache is bounded. POST `/b1/r` carries
+192 raw authorization bytes plus the operation, key and raw body. Keys and
+expected context are installed once; the credential witness stays local.
+One connection can carry the challenge and operation, with a two-request cap
+and five-second header/idle limit.
+
+`--wire legacy` explicitly selects the earlier JSON `/challenge` and
+`/records/KEY` transport with `x-zkweb-challenge`, `x-zkweb-proof` and
+`x-zkweb-tag` headers. There is no automatic downgrade. Both transports preserve
+the same circuit and logical request transcript.
 
 The listener consumes a recognized challenge before costly verification.
 Only a valid proof reaches record lookup or mutation. Challenges fail after

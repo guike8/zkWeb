@@ -1,68 +1,126 @@
 # Compact ZK client/server exchange
 
-This is a transport design target, not an implemented binary protocol. The current
-listener uses HTTP, JSON challenges and text-encoded authorization headers.
-The [live API tests](zk-api.md#live-public-api-test) exercise that implementation.
+`zk-request` and `zk-api` use the compact binary transport by default. Keys,
+credentials, profile identifiers and expected destinations are configured once.
+They are not repeated in request envelopes. The existing Groth16 circuit,
+trusted setup and logical request digests remain unchanged.
 
-The client proves group membership and binds its proof to the exact operation.
-The server verifies the proof, executes the operation and returns its result.
-Member secrets, membership paths, proving keys and verification keys are not
-sent with each request. An ordinary result is not a proof of correct server
-computation; that would require an additional statement and proof.
+Use `--wire legacy` explicitly when talking to an older listener. There is no
+automatic downgrade or retry after a failed compact request. CLI output remains
+JSON with `body_base64` for scripts; that local output format is separate from
+the binary messages exchanged with the listener.
 
-## Current authorization size
+Rust library callers use `client::request_compact` or
+`client::api_request_compact`; the original `request` and `api_request` functions
+retain the legacy transport for compatibility.
 
-| Field | Raw bytes | Current encoding |
+## Wire format
+
+Versioned HTTP routes define the format without another magic or version field
+in every body. All integers below are unsigned. Lengths use canonical unsigned
+LEB128: redundant encodings, overflow and lengths beyond the field limits are
+rejected. HTTP Content-Length frames each complete message, so the final body
+needs no redundant length prefix.
+
+| Exchange | Route | Binary body |
+| --- | --- | --- |
+| Challenge | GET `/b1/c` | server instance: 32 bytes; nonce: 32 bytes; expiry: 8 bytes, big endian |
+| Record request | POST `/b1/r` | nonce: 32; tag: 32; proof: 128; method: 1; key length + key; remaining raw payload |
+| Gateway request | POST `/b1/a` | nonce: 32; tag: 32; proof: 128; packed method/count: 1; path/query length + bytes; header pairs; remaining raw payload |
+| Record response | HTTP application status | raw record/result bytes |
+| Gateway response | HTTP 200 | packed status/count: 1–2 bytes; header pairs; remaining raw upstream body |
+
+Each header pair is name length + name bytes + value length + value bytes.
+Selected request headers retain their canonical lowercase names, stable name
+ordering and repeated-value ordering. A record request has no header-count field.
+The method codes are GET=0, HEAD=1, POST=2, PUT=3, PATCH=4, DELETE=5, OPTIONS=6.
+Record mode accepts GET, POST, PUT and DELETE.
+
+Gateway requests combine method and header count as `method_code * 33 + count`
+in one byte. Counts range from 0 to 32; codes above 230 are rejected. Replies
+combine status and count as `(status - 200) * 33 + count`, encoded as canonical
+unsigned LEB128. Codes above 13199 are rejected. An empty HTTP 200 upstream
+reply therefore needs only one envelope byte; the format never repeats the
+known origin or a format string.
+
+Request and response bodies use `application/octet-stream`. There are no text
+proof headers, JSON envelopes, base64 body expansion or repeated upstream URLs
+on this transport. Provider error bodies remain raw application data. Protocol
+rejections use HTTP error status and an empty body. An upstream 401, redirect or
+503 remains distinct from a gateway authorization or delivery failure.
+
+## Size and connection behavior
+
+| Authorization field | Binary bytes | Legacy text value bytes |
 | --- | ---: | ---: |
-| Compressed Groth16 proof | 128 | 172 base64 bytes |
-| Randomized public tag | 32 | 64 hex bytes |
-| One-use challenge identifier | 32 | 64 hex bytes |
-| Total | 192 | 300 bytes of values |
+| Compressed Groth16 proof | 128 | 172 base64 |
+| Randomized public tag | 32 | 64 hex |
+| One-use challenge identifier | 32 | 64 hex |
+| Total | 192 | 300 |
 
-The three complete authorization header lines use 353 bytes, including names,
-separators and CRLF. Other HTTP headers, operation metadata, payload and response
-are additional. These are implementation sizes, not a minimum across ZK systems.
+The legacy authorization header lines occupy 353 bytes including names and
+separators; compact mode puts the 192 raw bytes in the body. Operation metadata,
+HTTP framing and the actual payload are additional. A four-byte record key has
+198 bytes of total compact request overhead before its payload.
 
-The server already knows the group root and derives the two public digest limbs
-from the actual operation and stored challenge. Those inputs do not need another
-copy on the wire. The randomized tag remains a required public input to the
-existing circuit.
+A challenge is exactly 72 bytes. Challenge and operation can reuse one HTTP/1
+connection within a CLI call. They remain two exchanges; there is no persistent
+session with an implicit nonce. A connection accepts at most two HTTP requests,
+with a five-second header/idle deadline. The current implementation does not claim the
+160-byte session design discussed earlier, or a minimum across all ZK schemes.
 
-## Candidate binary exchange
+The end-to-end tests compare captured application-message sizes and reproducible
+HTTP/1 request serialization for identical operation and proof values. These
+measurements exclude TCP/TLS framing and are not network packet captures.
 
-Install the profile and keys once, and configure the expected protocol and
-upstream/service on both sides. Preserve the current logical transcript and
-canonicalization when decoding compact messages so existing circuit semantics
-and setup can remain unchanged.
+## Authorization and delivery boundaries
 
-1. Challenge: server instance (32 bytes), nonce (32 bytes), expiry (8 bytes).
-   This totals 72 bytes. A persistent authenticated session could send the
-   instance once, leaving 40 bytes per subsequent challenge.
-2. Request: nonce (32 bytes), tag (32 bytes), proof (128 bytes), operation code,
-   length-prefixed resource/path and selected headers, and the required raw
-   payload. The authorization portion totals 192 bytes without text expansion.
-3. Response: status, necessary metadata and raw result bytes. Preserve the
-   distinction between upstream responses, authorization errors and unknown
-   delivery. Avoid repeating the known origin or base64-encoding the body.
+The server derives the group root and request digest locally. The client
+reconstructs the protocol/profile/destination context from its configuration
+instead of receiving another copy in the challenge. A mismatched profile or
+expected upstream therefore fails proof verification; compact mode does not
+advertise the upstream for a pre-proof string comparison.
 
-A persistent connection with exactly one pending challenge could make the nonce
-implicit, reducing request authorization to 160 bytes. That requires a session
-protocol and restricts concurrency; it is not part of the current HTTP transport.
-Binary encoding alone does not remove HTTP, TLS or network framing overhead.
+The server consumes a recognized nonce before decoding the rest of its compact
+request. Malformed metadata or proof bytes cannot leave that nonce reusable.
+Expiry, instance/destination binding, canonical field and curve-point decoding,
+size limits and the current no-retry behavior remain enforced.
 
-Keep one-use challenge consumption before verification, expiry, server-instance
-and destination binding, strict canonical decoding, field/point validation, size
-limits and the current no-retry behavior. Retain fresh randomized tags; replacing
-them with a stable member handle would change the privacy property.
+ZK hides the member secret and membership path. Ordinary CRUD still requires the
+server to receive the operation and its inputs. Responses are ordinary results;
+the server does not produce a proof of correct computation. Request encryption
+from a cooperating destination remains separate work.
 
-## What the server learns
+The listener still accepts numeric-loopback HTTP endpoints. Remote authenticated
+HTTPS deployment is separate from this transport change. See the
+[gateway guide](zk-api.md) and [listener guide](zk-listener.md) for setup and
+trust assumptions.
 
-For ordinary CRUD, the server receives the operation, resource identifier and
-input required to execute it. ZK hides the authorization witness; it does not
-hide those inputs. HTTPS protects traffic in transit. Hiding operation inputs
-from a cooperating server is separate encrypted-computation work.
+## Verification
 
-The current listener accepts numeric-loopback HTTP endpoints. A hosted client
-and server need authenticated HTTPS support before this can become a remotely
-usable service. The compact transport described here is separate from that
-deployment work.
+`make test-zk` runs the real two-member client/server loop, persistent record
+CRUD, all seven gateway methods, 1 MiB binary payloads, malformed encodings,
+fresh-proof tampering, replay, nonce consumption and profile/destination binding.
+Legacy tests explicitly select `--wire legacy`.
+
+`make test-zk-live` additionally checks compact GET/HEAD against GitHub and all
+seven methods against httpbingo using disposable inputs. Set
+`ZKWEB_ZK_COMPACT_REPORT=/absolute/path/compact-live.json` to save sanitized
+GitHub compact sizes and public response identifiers. No proof, credential,
+challenge, tag, echoed source address or response body is written to the report.
+
+The [2026-11-05 compact GitHub run](validation/zk-compact-live-2026-11-05.json)
+and [compact method run](validation/zk-compact-methods-live-2026-11-05.json)
+passed against the real public HTTPS APIs. For the captured GitHub GET, the
+equivalent legacy and compact messages measured:
+
+| Component | Legacy bytes | Compact bytes |
+| --- | ---: | ---: |
+| Challenge body | 358 | 72 |
+| Serialized HTTP/1 operation request | 810 | 459 |
+| Gateway response body/envelope | 21,385 | 15,866 |
+
+The request is 43.3% smaller in this comparison. Header contents and payloads
+affect the totals; these are one run's message sizes, not a general throughput
+benchmark or TCP/TLS packet measurement. The response contains the same 14,629
+upstream body bytes plus header metadata, without base64 expansion.

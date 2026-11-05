@@ -40,7 +40,7 @@ func zkCommand(ctx context.Context, mode string, args []string, out io.Writer) e
 func zkWithBackend(ctx context.Context, mode string, args []string, out io.Writer, runner zkBackendRunner, executable executableResolver) error {
 	f := flag.NewFlagSet("zk-"+mode, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	var output, serverDir, stateFile, clientDir, endpoint, listen, method, key, data, dataFile string
+	var output, serverDir, stateFile, clientDir, endpoint, listen, method, key, data, dataFile, wire string
 	var upstream, allowedMethods, pathPrefix, upstreamCA, upstreamHeaders string
 	var allowPrivate bool
 	var members int
@@ -61,6 +61,7 @@ func zkWithBackend(ctx context.Context, mode string, args []string, out io.Write
 		f.StringVar(&upstreamCA, "upstream-ca-file", "", "optional trusted PEM CA file for the upstream TLS certificate")
 		f.StringVar(&upstreamHeaders, "upstream-headers-file", "", "optional private operator credential-header JSON file")
 	case "request":
+		f.StringVar(&wire, "wire", "compact", "client/server format: compact or explicit legacy; no automatic fallback")
 		f.StringVar(&clientDir, "client-dir", "", "required client profile with private membership credential")
 		f.StringVar(&endpoint, "url", "", "required numeric-loopback HTTP origin from zk-listen")
 		f.StringVar(&method, "method", "", "required POST, GET, PUT or DELETE")
@@ -147,6 +148,9 @@ func zkWithBackend(ctx context.Context, mode string, args []string, out io.Write
 		}
 	case "request":
 		var err error
+		if wire != "compact" && wire != "legacy" {
+			return errors.New("zk-request wire must be compact or legacy")
+		}
 		clientDir, err = privateAbsoluteDir(clientDir)
 		if err != nil {
 			return errors.New("zk-request requires --client-dir")
@@ -175,7 +179,7 @@ func zkWithBackend(ctx context.Context, mode string, args []string, out io.Write
 		} else if provided["data"] || provided["data-file"] {
 			return errors.New("GET/DELETE accepts no data argument")
 		}
-		backendArgs = append(backendArgs, "--client-dir", clientDir, "--url", endpoint, "--method", method, "--key", key, "--data-base64", base64.StdEncoding.EncodeToString(payload))
+		backendArgs = append(backendArgs, "--client-dir", clientDir, "--url", endpoint, "--method", method, "--key", key, "--wire", wire, "--data-base64", base64.StdEncoding.EncodeToString(payload))
 	}
 	path, err := executable()
 	if err != nil || !filepath.IsAbs(path) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use crate::{MAX_BODY, Result, crypto, fail, forward, profile::ClientProfile, protocol};
+use crate::{MAX_BODY, Result, compact, crypto, fail, forward, profile::ClientProfile, protocol};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{
     Method, Url,
@@ -93,12 +93,75 @@ fn bounded_body(mut response: Response, maximum: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn compact_content_type(response: &Response) -> bool {
+    let all = response.headers().get_all(reqwest::header::CONTENT_TYPE);
+    let mut values = all.iter();
+    values.next().and_then(|value| value.to_str().ok()) == Some(compact::CONTENT_TYPE)
+        && values.next().is_none()
+}
+
+fn challenge(
+    client: &Client,
+    endpoint: &Url,
+    profile_id: &str,
+    upstream: Option<&str>,
+    binary: bool,
+) -> Result<protocol::Challenge> {
+    let path = if binary {
+        compact::CHALLENGE_PATH
+    } else {
+        "/challenge"
+    };
+    let response = client.get(endpoint.join(path)?).send()?;
+    if response.status() != 200 {
+        return Err(fail("listener did not issue an authorization challenge"));
+    }
+    let challenge = if binary {
+        if !compact_content_type(&response) {
+            return Err(fail("listener did not return a compact challenge"));
+        }
+        compact::decode_challenge(&bounded_body(response, 72)?, profile_id, upstream)?
+    } else {
+        serde_json::from_slice::<protocol::Challenge>(&bounded_body(response, 8 * 1024)?)?
+    };
+    challenge.validate(profile_id)?;
+    if challenge.upstream_origin.as_deref() != upstream {
+        return Err(fail(
+            "listener mode or upstream differs from the expected origin",
+        ));
+    }
+    Ok(challenge)
+}
+
+/// Compatibility client for the legacy HTTP-header transport.
 pub fn request(
     profile: &ClientProfile,
     endpoint: &str,
     method: &str,
     key: &str,
     body: &[u8],
+) -> Result<PlainResult> {
+    request_with_wire(profile, endpoint, method, key, body, false)
+}
+
+/// Compact binary record transport used by the CLI by default.
+pub fn request_compact(
+    profile: &ClientProfile,
+    endpoint: &str,
+    method: &str,
+    key: &str,
+    body: &[u8],
+) -> Result<PlainResult> {
+    request_with_wire(profile, endpoint, method, key, body, true)
+}
+
+fn request_with_wire(
+    profile: &ClientProfile,
+    endpoint: &str,
+    method: &str,
+    key: &str,
+    body: &[u8],
+    binary: bool,
 ) -> Result<PlainResult> {
     if !matches!(method, "POST" | "GET" | "PUT" | "DELETE")
         || !protocol::valid_key(key)
@@ -109,16 +172,13 @@ pub fn request(
     }
     let endpoint = validated_url(endpoint)?;
     let client = http_client()?;
-    let response = client.get(endpoint.join("challenge")?).send()?;
-    if response.status() != 200 {
-        return Err(fail("listener did not issue a challenge"));
-    }
-    let challenge: protocol::Challenge =
-        serde_json::from_slice(&bounded_body(response, 8 * 1024)?)?;
-    challenge.validate(&profile.manifest.profile_id)?;
-    if challenge.upstream_origin.is_some() {
-        return Err(fail("record requests require a record-mode listener"));
-    }
+    let challenge = challenge(
+        &client,
+        &endpoint,
+        &profile.manifest.profile_id,
+        None,
+        binary,
+    )?;
     let path = format!("/records/{key}");
     let digest = protocol::request_digest(&challenge, method, &path, body);
     let authorization = crypto::prove(
@@ -128,18 +188,34 @@ pub fn request(
         &digest,
     )?;
     challenge.validate(&profile.manifest.profile_id)?;
-    let mut outgoing = client
-        .request(
-            Method::from_bytes(method.as_bytes())?,
-            endpoint.join(&path)?,
-        )
-        .header("X-ZkWeb-Challenge", &challenge.challenge_id)
-        .header("X-ZkWeb-Tag", &authorization.tag)
-        .header("X-ZkWeb-Proof", STANDARD.encode(&authorization.proof))
-        .body(body.to_vec());
-    if matches!(method, "POST" | "PUT") {
-        outgoing = outgoing.header("Content-Type", "application/octet-stream");
-    }
+    let outgoing = if binary {
+        client
+            .post(endpoint.join(compact::RECORD_PATH)?)
+            .header("Content-Type", compact::CONTENT_TYPE)
+            .body(compact::encode_request(
+                compact::Kind::Records,
+                &challenge.challenge_id,
+                &authorization,
+                method,
+                key,
+                &[],
+                body,
+            )?)
+    } else {
+        let mut outgoing = client
+            .request(
+                Method::from_bytes(method.as_bytes())?,
+                endpoint.join(&path)?,
+            )
+            .header("X-ZkWeb-Challenge", &challenge.challenge_id)
+            .header("X-ZkWeb-Tag", &authorization.tag)
+            .header("X-ZkWeb-Proof", STANDARD.encode(&authorization.proof))
+            .body(body.to_vec());
+        if matches!(method, "POST" | "PUT") {
+            outgoing = outgoing.header("Content-Type", "application/octet-stream");
+        }
+        outgoing
+    };
     // No automatic retry: a transport failure can occur after a durable commit.
     let response = outgoing.send().map_err(|_| unknown())?;
     let status = response.status().as_u16();
@@ -151,6 +227,9 @@ pub fn request(
         if (400..500).contains(&status) {
             return Err(fail("listener rejected ZK authorization or request"));
         }
+        return Err(unknown());
+    }
+    if binary && !compact_content_type(&response) {
         return Err(unknown());
     }
     let bytes = bounded_body(response, MAX_BODY).map_err(|_| unknown())?;
@@ -174,6 +253,7 @@ pub struct ApiResult {
     pub body_base64: String,
 }
 
+/// Compatibility client for the legacy JSON/header gateway transport.
 pub fn api_request(
     profile: &ClientProfile,
     endpoint: &str,
@@ -182,6 +262,50 @@ pub fn api_request(
     path_query: &str,
     headers: &[protocol::ApiHeader],
     body: &[u8],
+) -> Result<ApiResult> {
+    api_request_with_wire(
+        profile,
+        endpoint,
+        expected_upstream,
+        method,
+        path_query,
+        headers,
+        body,
+        false,
+    )
+}
+
+/// Compact binary gateway transport used by the CLI by default.
+pub fn api_request_compact(
+    profile: &ClientProfile,
+    endpoint: &str,
+    expected_upstream: &str,
+    method: &str,
+    path_query: &str,
+    headers: &[protocol::ApiHeader],
+    body: &[u8],
+) -> Result<ApiResult> {
+    api_request_with_wire(
+        profile,
+        endpoint,
+        expected_upstream,
+        method,
+        path_query,
+        headers,
+        body,
+        true,
+    )
+}
+
+fn api_request_with_wire(
+    profile: &ClientProfile,
+    endpoint: &str,
+    expected_upstream: &str,
+    method: &str,
+    path_query: &str,
+    headers: &[protocol::ApiHeader],
+    body: &[u8],
+    binary: bool,
 ) -> Result<ApiResult> {
     if !matches!(
         method,
@@ -196,16 +320,13 @@ pub fn api_request(
     let upstream = forward::canonical_origin(expected_upstream)?;
     let endpoint = validated_url(endpoint)?;
     let client = http_client()?;
-    let response = client.get(endpoint.join("challenge")?).send()?;
-    if response.status() != 200 {
-        return Err(fail("gateway did not issue an authorization challenge"));
-    }
-    let challenge: protocol::Challenge =
-        serde_json::from_slice(&bounded_body(response, 8 * 1024)?)?;
-    challenge.validate(&profile.manifest.profile_id)?;
-    if challenge.upstream_origin.as_deref() != Some(upstream.as_str()) {
-        return Err(fail("gateway upstream differs from the expected origin"));
-    }
+    let challenge = challenge(
+        &client,
+        &endpoint,
+        &profile.manifest.profile_id,
+        Some(&upstream),
+        binary,
+    )?;
     let digest =
         protocol::api_request_digest(&challenge, &upstream, method, path_query, &headers, body);
     let authorization = crypto::prove(
@@ -217,37 +338,62 @@ pub fn api_request(
     challenge.validate(&profile.manifest.profile_id)?;
     // Always POST the gateway envelope, including for an upstream HEAD request.
     // Only the explicit signed metadata becomes upstream request headers.
-    let response = client
-        .post(endpoint.join("api")?)
-        .header(protocol::CHALLENGE_HEADER, &challenge.challenge_id)
-        .header(protocol::TAG_HEADER, &authorization.tag)
-        .header(
-            protocol::PROOF_HEADER,
-            STANDARD.encode(&authorization.proof),
-        )
-        .header(protocol::API_METHOD_HEADER, method)
-        .header(
-            protocol::API_PATH_HEADER,
-            STANDARD.encode(path_query.as_bytes()),
-        )
-        .header(
-            protocol::API_HEADERS_HEADER,
-            STANDARD.encode(serde_json::to_vec(&headers)?),
-        )
-        .header("Content-Type", "application/octet-stream")
-        .body(body.to_vec())
-        .send()
-        .map_err(|_| unknown())?;
+    let outgoing = if binary {
+        client
+            .post(endpoint.join(compact::API_PATH)?)
+            .header("Content-Type", compact::CONTENT_TYPE)
+            .body(compact::encode_request(
+                compact::Kind::Api,
+                &challenge.challenge_id,
+                &authorization,
+                method,
+                path_query,
+                &headers,
+                body,
+            )?)
+    } else {
+        client
+            .post(endpoint.join("api")?)
+            .header(protocol::CHALLENGE_HEADER, &challenge.challenge_id)
+            .header(protocol::TAG_HEADER, &authorization.tag)
+            .header(
+                protocol::PROOF_HEADER,
+                STANDARD.encode(&authorization.proof),
+            )
+            .header(protocol::API_METHOD_HEADER, method)
+            .header(
+                protocol::API_PATH_HEADER,
+                STANDARD.encode(path_query.as_bytes()),
+            )
+            .header(
+                protocol::API_HEADERS_HEADER,
+                STANDARD.encode(serde_json::to_vec(&headers)?),
+            )
+            .header("Content-Type", "application/octet-stream")
+            .body(body.to_vec())
+    };
+    let response = outgoing.send().map_err(|_| unknown())?;
     if response.status().is_client_error() {
         return Err(fail("gateway rejected ZK authorization or API request"));
     }
     if response.status() != 200 {
         return Err(unknown());
     }
-    let response: protocol::ApiResponse = serde_json::from_slice(
-        &bounded_body(response, crate::MAX_API_ENVELOPE).map_err(|_| unknown())?,
-    )
-    .map_err(|_| unknown())?;
+    let response: protocol::ApiResponse = if binary {
+        if !compact_content_type(&response) {
+            return Err(unknown());
+        }
+        compact::decode_api_response(
+            &bounded_body(response, compact::MAX_API_REPLY).map_err(|_| unknown())?,
+            &upstream,
+        )
+        .map_err(|_| unknown())?
+    } else {
+        serde_json::from_slice(
+            &bounded_body(response, crate::MAX_API_ENVELOPE).map_err(|_| unknown())?,
+        )
+        .map_err(|_| unknown())?
+    };
     if response.format != "zkweb-zk-api-response-v1"
         || response.upstream != upstream
         || !(200..=599).contains(&response.status)

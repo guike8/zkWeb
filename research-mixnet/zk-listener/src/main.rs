@@ -17,6 +17,14 @@ fn option(options: &mut BTreeMap<String, String>, key: &str) -> Result<String> {
         .ok_or_else(|| fail("missing required option"))
 }
 
+fn compact_wire(options: &mut BTreeMap<String, String>) -> Result<bool> {
+    match options.remove("--wire").as_deref().unwrap_or("compact") {
+        "compact" => Ok(true),
+        "legacy" => Ok(false),
+        _ => Err(fail("wire must be compact or legacy")),
+    }
+}
+
 fn print_json(value: &impl serde::Serialize, uncertain: bool) -> Result<()> {
     let mut bytes = serde_json::to_vec(value)?;
     bytes.push(b'\n');
@@ -115,6 +123,7 @@ fn run() -> Result<()> {
             let method = option(&mut options, "--method")?;
             let key = option(&mut options, "--key")?;
             let encoded = option(&mut options, "--data-base64")?;
+            let compact = compact_wire(&mut options)?;
             if !options.is_empty() || encoded.len() > MAX_BODY.div_ceil(3) * 4 {
                 return Err(fail("invalid request options"));
             }
@@ -122,7 +131,12 @@ fn run() -> Result<()> {
             if body.len() > MAX_BODY || STANDARD.encode(&body) != encoded {
                 return Err(fail("invalid request body"));
             }
-            let result = client::request(
+            let send = if compact {
+                client::request_compact
+            } else {
+                client::request
+            };
+            let result = send(
                 &profile::load_client(Path::new(&directory))?,
                 &endpoint,
                 &method,
@@ -139,6 +153,7 @@ fn run() -> Result<()> {
             let path = option(&mut options, "--path")?;
             let encoded = option(&mut options, "--headers-base64")?;
             let body_file = option(&mut options, "--body-file")?;
+            let compact = compact_wire(&mut options)?;
             if !options.is_empty()
                 || encoded.len() > zkweb_zk_listener::MAX_API_HEADER_BYTES.div_ceil(3) * 4
             {
@@ -167,7 +182,12 @@ fn run() -> Result<()> {
             if body.len() > zkweb_zk_listener::MAX_API_BODY {
                 return Err(fail("API body exceeds limit"));
             }
-            let result = client::api_request(
+            let send = if compact {
+                client::api_request_compact
+            } else {
+                client::api_request
+            };
+            let result = send(
                 &profile::load_client(Path::new(&directory))?,
                 &endpoint,
                 &upstream,

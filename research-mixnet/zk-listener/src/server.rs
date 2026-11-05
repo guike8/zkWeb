@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::{
     CHALLENGE_LIFETIME, MAX_API_BODY, MAX_API_ENVELOPE, MAX_API_HEADER_BYTES, MAX_API_PATH,
-    MAX_BODY, MAX_CHALLENGES, PROOF_BYTES, PROTOCOL, Result, crypto, fail,
+    MAX_BODY, MAX_CHALLENGES, PROOF_BYTES, PROTOCOL, Result, compact, crypto, fail,
     forward::{Config as ForwardConfig, Forwarder},
     profile::ServerProfile,
     protocol::{self, ApiHeader, ApiResponse, Challenge},
@@ -19,7 +19,7 @@ use hyper::{
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     convert::Infallible,
     net::{SocketAddr, TcpListener},
@@ -27,17 +27,25 @@ use std::{
     rc::Rc,
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 pub const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+pub const COMPACT_IDLE_TIMEOUT: Duration = HEADER_TIMEOUT;
+const REQUESTS_PER_CONNECTION: u8 = 2;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 const STOP_POLL: Duration = Duration::from_millis(100);
 
 /// One active HTTP/1 connection, with bounded parsing and no task/thread fan-out.
 pub struct Server {
     listener: TcpListener,
+}
+
+struct ConnectionProgress {
+    active: Cell<bool>,
+    requests: Cell<u8>,
+    idle_since: Cell<Instant>,
 }
 
 pub struct Reply {
@@ -207,6 +215,10 @@ impl State {
         let challenge = self.take_challenge(challenge_id)?;
         let digest = protocol::request_digest(&challenge, method, path, body);
         self.verify_authorization(&challenge, &digest, proof_base64, tag)?;
+        self.commit_record(method, key, body)
+    }
+
+    fn commit_record(&mut self, method: &str, key: &str, body: &[u8]) -> Result<Reply> {
         self.executions += 1;
         let Backend::Records(database) = &mut self.backend else {
             return Err(fail("record mode required"));
@@ -225,6 +237,20 @@ impl State {
             status: result.status,
             body: result.body,
         })
+    }
+
+    /// Consume the recognized nonce before decoding any other compact fields.
+    pub fn execute_compact(&mut self, bytes: &[u8]) -> Result<Reply> {
+        self.check_available()?;
+        if self.is_gateway() {
+            return Err(fail("record mode required"));
+        }
+        let challenge = self.take_challenge(&compact::nonce(bytes)?)?;
+        let request = compact::decode_request(compact::Kind::Records, bytes)?;
+        let path = protocol::record_path(&request.resource)?;
+        let digest = protocol::request_digest(&challenge, &request.method, &path, &request.body);
+        self.verify_authorization_bytes(&challenge, &digest, &request.proof, &request.tag)?;
+        self.commit_record(&request.method, &request.resource, &request.body)
     }
 
     fn take_challenge(&mut self, challenge_id: &str) -> Result<Challenge> {
@@ -255,7 +281,17 @@ impl State {
             return Err(fail("invalid authorization"));
         }
         let proof = STANDARD.decode(proof_base64)?;
-        if proof.len() != PROOF_BYTES {
+        self.verify_authorization_bytes(challenge, digest, &proof, tag)
+    }
+
+    fn verify_authorization_bytes(
+        &mut self,
+        challenge: &Challenge,
+        digest: &[u8; 32],
+        proof: &[u8],
+        tag: &str,
+    ) -> Result<()> {
+        if proof.len() != PROOF_BYTES || !protocol::valid_id(tag) {
             return Err(fail("invalid authorization proof"));
         }
         self.verification_attempts += 1;
@@ -263,7 +299,7 @@ impl State {
             &self.profile.verifying_key,
             &self.profile.manifest.group_root,
             digest,
-            &proof,
+            proof,
             tag,
         )? {
             return Err(fail("invalid authorization proof"));
@@ -311,6 +347,44 @@ impl State {
         let digest =
             protocol::api_request_digest(&challenge, &origin, method, &path, &headers, body);
         self.verify_authorization(&challenge, &digest, proof_base64, tag)?;
+        self.finish_api_request(method, path, headers, body)
+    }
+
+    /// The binary envelope has the same logical transcript as the legacy route.
+    pub fn prepare_api_compact(&mut self, bytes: &[u8]) -> Result<AuthorizedApi> {
+        self.check_available()?;
+        if !self.is_gateway() {
+            return Err(fail("upstream gateway mode required"));
+        }
+        let challenge = self.take_challenge(&compact::nonce(bytes)?)?;
+        let request = compact::decode_request(compact::Kind::Api, bytes)?;
+        let origin = self
+            .upstream_origin()
+            .ok_or_else(|| fail("missing upstream"))?;
+        let digest = protocol::api_request_digest(
+            &challenge,
+            origin,
+            &request.method,
+            &request.resource,
+            &request.headers,
+            &request.body,
+        );
+        self.verify_authorization_bytes(&challenge, &digest, &request.proof, &request.tag)?;
+        self.finish_api_request(
+            &request.method,
+            request.resource,
+            request.headers,
+            &request.body,
+        )
+    }
+
+    fn finish_api_request(
+        &mut self,
+        method: &str,
+        path: String,
+        headers: Vec<ApiHeader>,
+        body: &[u8],
+    ) -> Result<AuthorizedApi> {
         let Backend::Upstream(forwarder) = &self.backend else {
             return Err(fail("upstream gateway mode required"));
         };
@@ -361,6 +435,19 @@ fn response(
 fn json(status: u16, body: &'static [u8]) -> Response<Full<Bytes>> {
     response(status, "application/json", body)
 }
+/// The route versions the binary format. Keep the connection for the next
+/// challenge/request exchange and let HTTP carry the only body-length field.
+fn binary(status: u16, body: impl Into<Bytes>) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("Content-Type", compact::CONTENT_TYPE)
+        .header("Cache-Control", "no-store")
+        .body(Full::new(body.into()))
+        .expect("fixed valid response headers")
+}
+fn binary_error(status: u16) -> Response<Full<Bytes>> {
+    binary(status, Bytes::new())
+}
 fn invalid_request() -> Response<Full<Bytes>> {
     json(400, br#"{"error":"invalid request"}"#)
 }
@@ -386,15 +473,28 @@ async fn handle(
     state: Rc<RefCell<&mut State>>,
     request: Request<Incoming>,
 ) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
+    let path = request.uri().path().to_owned();
+    let is_compact = path.starts_with("/b1/");
+    let invalid = || {
+        if is_compact {
+            binary_error(400)
+        } else {
+            invalid_request()
+        }
+    };
     if request.headers().contains_key(ORIGIN) {
-        return Ok(json(403, br#"{"error":"origin forbidden"}"#));
+        return Ok(if is_compact {
+            binary_error(403)
+        } else {
+            json(403, br#"{"error":"origin forbidden"}"#)
+        });
     }
     if request.uri().scheme().is_some()
         || request.uri().authority().is_some()
         || request.uri().query().is_some()
         || request.headers().contains_key(TRANSFER_ENCODING)
     {
-        return Ok(invalid_request());
+        return Ok(invalid());
     }
     let lengths = request.headers().get_all(CONTENT_LENGTH);
     let mut lengths = lengths.iter();
@@ -406,19 +506,107 @@ async fn handle(
             .and_then(|text| text.parse::<usize>().ok())
         {
             Some(length) => Some(length),
-            None => return Ok(invalid_request()),
+            None => return Ok(invalid()),
         },
         None => None,
     };
     if lengths.next().is_some() {
-        return Ok(invalid_request());
+        return Ok(invalid());
     }
     let gateway = state.borrow().is_gateway();
-    let body_limit = if gateway { MAX_API_BODY } else { MAX_BODY };
+    let body_limit = match path.as_str() {
+        compact::RECORD_PATH => compact::MAX_RECORD_REQUEST,
+        compact::API_PATH => compact::MAX_API_REQUEST,
+        compact::CHALLENGE_PATH => 0,
+        _ if gateway => MAX_API_BODY,
+        _ => MAX_BODY,
+    };
     if content_length.is_some_and(|length| length > body_limit) {
-        return Ok(json(413, br#"{"error":"body too large"}"#));
+        return Ok(if is_compact {
+            binary_error(413)
+        } else {
+            json(413, br#"{"error":"body too large"}"#)
+        });
     }
-    let path = request.uri().path().to_owned();
+    if is_compact {
+        if path == compact::CHALLENGE_PATH {
+            if request.method() != Method::GET {
+                return Ok(binary_error(405));
+            }
+            let mut state = state.borrow_mut();
+            return Ok(
+                match state
+                    .challenge()
+                    .and_then(|challenge| compact::encode_challenge(&challenge))
+                {
+                    Ok(bytes) => binary(200, bytes),
+                    Err(_) if state.poisoned => binary_error(503),
+                    Err(_) => binary_error(429),
+                },
+            );
+        }
+        let correct_mode = if gateway {
+            path == compact::API_PATH
+        } else {
+            path == compact::RECORD_PATH
+        };
+        if !correct_mode {
+            // 404 is a valid record GET result. A mode mismatch must never
+            // masquerade as an authorized "record not found" response.
+            return Ok(binary_error(
+                if path == compact::API_PATH || path == compact::RECORD_PATH {
+                    400
+                } else {
+                    404
+                },
+            ));
+        }
+        if request.method() != Method::POST {
+            return Ok(binary_error(405));
+        }
+        if header_once(request.headers(), "content-type") != Some(compact::CONTENT_TYPE)
+            || content_length.is_none()
+            || request
+                .headers()
+                .keys()
+                .any(|name| name.as_str().starts_with("x-zkweb-"))
+        {
+            return Ok(invalid());
+        }
+        let bytes = match tokio::time::timeout(
+            BODY_TIMEOUT,
+            Limited::new(request.into_body(), body_limit).collect(),
+        )
+        .await
+        {
+            Ok(Ok(body)) => body.to_bytes(),
+            _ => return Ok(invalid()),
+        };
+        if bytes.len() != content_length.unwrap_or(0) {
+            return Ok(invalid());
+        }
+        if !gateway {
+            let mut state = state.borrow_mut();
+            return Ok(match state.execute_compact(&bytes) {
+                Ok(reply) => binary(reply.status, reply.body),
+                Err(_) if state.poisoned => binary_error(503),
+                Err(_) => binary_error(401),
+            });
+        }
+        let authorized = state.borrow_mut().prepare_api_compact(&bytes);
+        return Ok(match authorized {
+            Ok(request) => match request
+                .send()
+                .await
+                .and_then(|result| compact::encode_api_response(&result))
+            {
+                Ok(bytes) => binary(200, bytes),
+                Err(_) => binary_error(502),
+            },
+            Err(error) if error.is::<ApiPolicyDenied>() => binary_error(403),
+            Err(_) => binary_error(401),
+        });
+    }
     if request.method() == Method::GET && path == "/challenge" {
         if content_length.is_some_and(|length| length != 0) {
             return Ok(invalid_request());
@@ -604,10 +792,37 @@ pub fn run(server: &Server, state: &mut State, stop: Option<&AtomicBool>) -> Res
                 Err(_) => continue,
             };
             let state = state.clone();
-            let service = service_fn(move |request| handle(state.clone(), request));
+            let progress = Rc::new(ConnectionProgress {
+                active: Cell::new(false),
+                requests: Cell::new(0),
+                idle_since: Cell::new(Instant::now()),
+            });
+            let service_progress = progress.clone();
+            let service = service_fn(move |request| {
+                let state = state.clone();
+                let progress = service_progress.clone();
+                async move {
+                    progress.active.set(true);
+                    progress
+                        .requests
+                        .set(progress.requests.get().saturating_add(1));
+                    let mut result = handle(state, request).await;
+                    progress.active.set(false);
+                    progress.idle_since.set(Instant::now());
+                    if progress.requests.get() >= REQUESTS_PER_CONNECTION {
+                        if let Ok(response) = &mut result {
+                            response.headers_mut().insert(
+                                hyper::header::CONNECTION,
+                                hyper::header::HeaderValue::from_static("close"),
+                            );
+                        }
+                    }
+                    result
+                }
+            });
             let mut builder = http1::Builder::new();
             builder
-                .keep_alive(false)
+                .keep_alive(true)
                 .max_headers(32)
                 .max_buf_size(header_buffer)
                 .header_read_timeout(HEADER_TIMEOUT)
@@ -617,6 +832,14 @@ pub fn run(server: &Server, state: &mut State, stop: Option<&AtomicBool>) -> Res
             loop {
                 if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                     return Ok(());
+                }
+                // Hyper's header timeout alone does not bound an idle reused
+                // connection before its next header starts. Preserve the
+                // original five-second unauthenticated wait budget explicitly.
+                if !progress.active.get()
+                    && progress.idle_since.get().elapsed() >= COMPACT_IDLE_TIMEOUT
+                {
+                    break;
                 }
                 if tokio::time::timeout(STOP_POLL, connection.as_mut())
                     .await

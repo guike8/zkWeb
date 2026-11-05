@@ -145,7 +145,7 @@ func TestZKAPIGatewayLiveMethods(t *testing.T) {
 	}
 	if filename := os.Getenv("ZKWEB_ZK_LIVE_METHODS_REPORT"); filename != "" {
 		report := map[string]any{
-			"format": "zkweb-zk-live-methods-evidence-v1", "started_utc": started.Format(time.RFC3339Nano),
+			"format": "zkweb-zk-live-methods-evidence-v1", "wire": "compact-b1", "started_utc": started.Format(time.RFC3339Nano),
 			"completed_utc": time.Now().UTC().Format(time.RFC3339Nano), "upstream": origin,
 			"fresh_profile_members": 2, "public_dns_and_webpki_defaults": true,
 			"upstream_authorization": "public API; no token or injected credentials", "responses": responses,

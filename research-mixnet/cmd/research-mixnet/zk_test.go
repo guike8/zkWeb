@@ -112,6 +112,7 @@ func TestZKInvalidArgumentsNeverLaunchBackend(t *testing.T) {
 		{"request", append(zkRequestArgs("PUT"), "--data-file", "/body")},
 		{"request", []string{"--client-dir", "/client", "--url", "http://127.0.0.1:8080", "--method", "POST", "--key", "x"}},
 		{"request", append(zkRequestArgs("POST"), "extra")},
+		{"request", append(zkRequestArgs("GET"), "--wire", "automatic")},
 	}
 	for _, test := range cases {
 		var out bytes.Buffer
@@ -130,6 +131,49 @@ func TestZKInvalidArgumentsNeverLaunchBackend(t *testing.T) {
 	}
 	if _, err := zkReadDataFile(filepath.Dir(oversize)); err == nil {
 		t.Fatal("directory accepted as body")
+	}
+}
+
+func TestZKWireSelectionDefaultsToCompactAndLegacyIsExplicit(t *testing.T) {
+	for _, command := range []string{"request", "api"} {
+		for _, selected := range []string{"", "compact", "legacy"} {
+			t.Run(command+"/"+selected, func(t *testing.T) {
+				args := zkRequestArgs("GET")
+				if command == "api" {
+					args = apiArgs()
+				}
+				if selected != "" {
+					args = append(args, "--wire", selected)
+				}
+				want := selected
+				if want == "" {
+					want = "compact"
+				}
+				calls := 0
+				runner := func(_ context.Context, _ string, backend []string, destination io.Writer) error {
+					calls++
+					if argValue(backend, "--wire") != want {
+						t.Fatalf("wire selection changed: want %s", want)
+					}
+					result := zkReport("GET", "note-1", 200, nil)
+					if command == "api" {
+						result = apiReport("POST", "/v1/items?a=%2F", 200, nil)
+					}
+					_, err := destination.Write(result)
+					return err
+				}
+				var out bytes.Buffer
+				var err error
+				if command == "api" {
+					err = zkAPIWithBackend(context.Background(), args, &out, runner, zkExecutable)
+				} else {
+					err = zkWithBackend(context.Background(), "request", args, &out, runner, zkExecutable)
+				}
+				if err != nil || calls != 1 || !json.Valid(out.Bytes()) {
+					t.Fatalf("wire selection failed or retried: %v", err)
+				}
+			})
+		}
 	}
 }
 

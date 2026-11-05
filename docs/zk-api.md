@@ -58,6 +58,12 @@ files are supported up to 1 MiB. The Go wrapper stages the body in a private
 temporary file instead of putting large plaintext bodies in process arguments,
 and removes that file after normal completion or failure.
 
+Requests use the [compact binary transport](compact-zk-client-server.md) by
+default: a 72-byte challenge and 192 raw authorization bytes, followed by the
+necessary operation metadata and payload. Gateway responses carry raw binary
+bytes. Use `--wire legacy` only for an older listener; there is no automatic
+downgrade. The CLI still prints JSON with base64 bodies locally for scripts.
+
 ## Headers and gateway-held credentials
 
 Each `--header 'Name: value'` is part of the proof-bound request. Names are
@@ -102,12 +108,12 @@ dot-segment escapes, encoded separators and fragment/authority tricks are
 rejected. The path-prefix allowlist applies to the validated path. Neither the
 gateway nor client follows redirects or automatically retries requests.
 
-The local gateway transport always uses POST `/api`, including for an upstream
-HEAD. Signed metadata carries the target method, path/query and header list;
-the proof is verified against those target values before forwarding. A complete
-upstream reply is wrapped in a gateway success envelope containing the upstream
-status, cleaned headers and base64 body. An upstream 401, redirect or 503 is
-therefore distinct from a gateway authorization or delivery failure.
+The compact gateway transport uses POST `/b1/a`, including for an upstream HEAD.
+Its binary body contains authorization, target method, exact path/query, selected
+headers and raw payload. A complete reply carries upstream status, cleaned
+headers and raw body. Legacy mode uses POST `/api`, text metadata headers and a
+JSON/base64 response envelope. Both formats distinguish an upstream 401,
+redirect or 503 from a gateway authorization or delivery failure.
 
 The CLI result has `format`, `method`, `path`, `upstream`, numeric `status`,
 `headers` and `body_base64`. The body limit is 1 MiB in both directions.
@@ -144,6 +150,7 @@ make test-zk-live
 # Optionally save sanitized evidence to an existing directory:
 ZKWEB_ZK_LIVE_REPORT=/absolute/path/github-live.json \
 ZKWEB_ZK_LIVE_METHODS_REPORT=/absolute/path/methods-live.json \
+ZKWEB_ZK_COMPACT_REPORT=/absolute/path/compact-live.json \
   make test-zk-live
 ```
 
@@ -156,7 +163,14 @@ upstream error and a gateway rejection. Fresh proofs are altered to check method
 path/query, header and proof binding; a captured successful authorization is also
 replayed and rejected.
 
-A second fresh group/gateway sends all seven HTTP methods to
+A compact GitHub check separately captures the default binary GET/HEAD exchange,
+checks the exact challenge and proof-envelope sizes, compares equivalent legacy
+message sizes, and verifies one client-to-observer connection per
+challenge/request pair. A separate direct TCP test checks actual listener
+connection reuse and idle bounds.
+The legacy GitHub authorization regression explicitly selects `--wire legacy`.
+
+A fresh compact client/server group sends all seven HTTP methods to
 `https://httpbingo.org/anything`, with disposable test data. It checks echoed
 methods, queries, headers and payloads for GET/POST/PUT/PATCH/DELETE, an empty
 HEAD body, and OPTIONS preflight metadata. The provider's
@@ -185,6 +199,7 @@ transit. GitHub sees the gateway's IP because it proxies the request. Both the
 gateway and GitHub see the request contents. None of those content or IP
 properties are supplied by the ZK membership proof.
 
-The [compact client/server design](compact-zk-client-server.md) separates current
-wire sizes from a proposed binary exchange that reduces repeated metadata and
-text encoding. That transport is not implemented yet.
+The [compact client/server format](compact-zk-client-server.md) documents the
+implemented binary messages, byte accounting and compatibility behavior, with
+[compact GitHub evidence](validation/zk-compact-live-2026-11-05.json) and
+[compact method evidence](validation/zk-compact-methods-live-2026-11-05.json).

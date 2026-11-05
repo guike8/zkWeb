@@ -227,7 +227,7 @@ func TestZKAPIGatewayIntegration(t *testing.T) {
 	const echoPath = "/v1/echo?raw=%2F&same=1&same=2"
 	headers := []string{"--header", "X-Echo: first", "--header", "X-Echo: second", "--header", "Content-Type: application/octet-stream"}
 	requestArgs := func(member int, method, path string, body []byte) []string {
-		args := []string{"zk-api", "--client-dir", profile.ClientDirs[member], "--url", spy.URL, "--upstream", upstream.URL, "--method", method, "--path", path}
+		args := []string{"zk-api", "--wire", "legacy", "--client-dir", profile.ClientDirs[member], "--url", spy.URL, "--upstream", upstream.URL, "--method", method, "--path", path}
 		args = append(args, headers...)
 		if body != nil || method == "POST" || method == "PUT" || method == "PATCH" {
 			filename := filepath.Join(directory, fmt.Sprintf("body-%d-%d.dat", member, time.Now().UnixNano()))
